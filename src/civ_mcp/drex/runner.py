@@ -721,6 +721,8 @@ class Runner:
                         "api": round(api_ms, 1),
                         "execute": outcome.elapsed_ms,
                         "observe": observe["ms"],
+                        "observe_roundtrips": observe["roundtrips"],
+                        "execute_roundtrips": outcome.roundtrips,
                         "roundtrips": observe["roundtrips"] + outcome.roundtrips,
                     },
                 },

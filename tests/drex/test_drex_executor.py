@@ -468,8 +468,9 @@ def test_research_precheck_reuses_progress_from_inputs():
             cand, point, current_version=obs.version, turn=5, inputs=inputs
         )
     )
-    # one read for the postcondition, none for the precheck
-    assert game.query_counts["get_progress_types"] == n + 1
+    # none for the precheck (inputs carry progress; eligibility was checked at
+    # enumeration) and none for the postcondition (confirmed from the dispatch)
+    assert game.query_counts["get_progress_types"] == n
 
 
 # ------------------------------------------ confirm from dispatch output (C4)

@@ -184,3 +184,51 @@ def test_next_inputs_are_prefetched_during_selection(tmp_path):
         order[i][0] == "choose" and order[i + 1][0] == "space"
         for i in range(len(order) - 1)
     ), order
+
+
+# ------------------------------------------------------------ budget (C1-C5)
+def test_decision_round_trip_budget(tmp_path):
+    """At most 3 round trips per decision, counted on the fake connection with
+    the batched observation the live game uses."""
+    from drex_fakes import FakeGame
+    from test_drex_runner import PreferSelector, _fake_end_turn, _records
+
+    from civ_mcp.drex.decision_log import DecisionLog
+    from civ_mcp.drex.runner import RunConfig, Runner
+
+    class CountingSnapshotGame(_SnapshotGame):
+        async def get_core_snapshot(self, parts=None):
+            from civ_mcp.game_state import CORE_PARTS
+
+            parts = frozenset(parts or CORE_PARTS)
+            rt0 = self.base.conn.roundtrips
+            snap = await super().get_core_snapshot(parts)
+            # the live snapshot is one InGame batch plus one GameCore batch
+            trips = 1 + (1 if parts & {"tech", "progress"} else 0)
+            self.base.conn.roundtrips = rt0 + trips
+            snap.roundtrips = trips
+            return snap
+
+    game = CountingSnapshotGame(FakeGame())
+    log = DecisionLog(tmp_path / "run.jsonl", run_id="t", secrets=[])
+    runner = Runner(
+        game,
+        PreferSelector(prefixes=("move:", "research:", "produce:", "skip:")),
+        log,
+        RunConfig(turns=1),
+        end_turn=_fake_end_turn(game.base),
+    )
+    asyncio.run(runner.run())
+    decisions = [r for r in _records(tmp_path) if r["type"] == "decision"]
+    assert decisions
+    # A full observation (2 round trips) is per-turn overhead; the budget is
+    # one partial refresh plus at most two round trips to execute.
+    over = [
+        (r["decision_id"], r["dispatch"]["method"], r["timing_ms"])
+        for r in decisions
+        if r["timing_ms"]["execute_roundtrips"] > 2
+        or min(r["timing_ms"]["observe_roundtrips"], 1)
+        + r["timing_ms"]["execute_roundtrips"]
+        > 3
+    ]
+    assert not over, over

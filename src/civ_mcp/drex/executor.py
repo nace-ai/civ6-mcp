@@ -314,6 +314,10 @@ class Executor:
                     kind, target, current = "civic", p.civic_type, progress.civic_type
                 if current is not None:
                     return _no(f"{kind}_already_selected:{current}")
+                if known is not None:
+                    # Candidates were built with the engine's eligibility check
+                    # at this same observation version; no fresh read needed.
+                    return _ok(method="enumeration")
                 eligible, how = await gs.check_eligibility(kind, target)
                 return _ok(method=how) if eligible else _no(f"not_eligible:{how}")
 
@@ -506,6 +510,16 @@ class Executor:
                 research = c.kind is ActionKind.SET_RESEARCH
                 target = p.tech_type if research else p.civic_type
 
+                # The dispatch reports the selection it made; a matching type
+                # confirms without a readback poll.
+                prefix = "RESEARCHING|" if research else "PROGRESSING"
+                first = raw.splitlines()[0] if raw else ""
+                if first.startswith(prefix) and first.split("|", 1)[-1] == target:
+                    return confirmed(
+                        "selection_confirmed_from_dispatch",
+                        gamecore_fallback="_GC" in first,
+                    )
+
                 async def applied():
                     progress = await gs.get_progress_types()
                     now = progress.research_type if research else progress.civic_type
@@ -600,6 +614,8 @@ class Executor:
                 )
 
             case ActionKind.SKIP_UNIT:
+                if raw.strip().startswith(("SKIPPED", "OK:SKIPPED")):
+                    return confirmed("skipped_from_dispatch")
 
                 async def done():
                     state = await gs.get_unit_state(p.unit.unit_index)
