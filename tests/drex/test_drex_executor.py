@@ -21,6 +21,7 @@ from civ_mcp.drex.enumerate import (
     envoy_candidates,
     government_candidates,
     governor_candidates,
+    great_person_candidates,
     pantheon_candidates,
     policy_candidates,
     production_candidates,
@@ -193,6 +194,23 @@ DISPATCH_CASES.append(
         ("choose_dedication", (0,)),
     )
 )
+_GP_CANDS = great_person_candidates(fx.great_people(), gold=1000, faith=0, forced=False)
+DISPATCH_CASES.extend(
+    [
+        (
+            _cand(_GP_CANDS, ActionKind.RECRUIT_GREAT_PERSON),
+            ("recruit_great_person", (7,)),
+        ),
+        (
+            _cand(
+                _GP_CANDS,
+                ActionKind.PATRONIZE_GREAT_PERSON,
+                lambda c: c.params.individual_id == 9,
+            ),
+            ("patronize_great_person", (9, "YIELD_GOLD")),
+        ),
+    ]
+)
 _GOV_CANDS = governor_candidates(
     fx.governors(points=1, unassigned=True), [fx.capital()]
 )
@@ -245,8 +263,6 @@ NO_DISPATCH_KINDS = {
 # Phase 2 kinds whose candidate builders and fakes land in later tasks; each
 # task removes its kinds here and adds them to DISPATCH_CASES.
 PENDING_KINDS = {
-    ActionKind.RECRUIT_GREAT_PERSON,
-    ActionKind.PATRONIZE_GREAT_PERSON,
     ActionKind.FOUND_RELIGION,
     ActionKind.ADD_BELIEF,
     ActionKind.CITY_ATTACK,
@@ -272,6 +288,7 @@ def test_executor_performs_the_mapped_call_and_confirms_or_acknowledges(cand, ex
         game.spaces[fx.WARRIOR_IDX] = _wounded_space()
     game.promotable = [fx.promotable_warrior()]
     game.governor_status = fx.governors(points=1, unassigned=True)
+    game.great_people = fx.great_people()
     outcome = _run(game, cand)
     assert game.calls == [expected]
     assert outcome.dispatched is True

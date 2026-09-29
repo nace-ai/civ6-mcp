@@ -22,6 +22,7 @@ from civ_mcp.drex.candidates import (
     EnvoyParams,
     Exclusion,
     GovernmentParams,
+    GreatPersonParams,
     ImproveParams,
     KeepGovernmentParams,
     MoveParams,
@@ -33,6 +34,7 @@ from civ_mcp.drex.candidates import (
     ResearchParams,
     UnitOrderParams,
     UnitRef,
+    WaitParams,
 )
 
 _PREFIXES = (
@@ -476,6 +478,64 @@ def dedication_candidates(status: lq.DedicationStatus) -> list[Candidate]:
                 DedicationParams(ch.index, ch.name),
                 label=pretty(ch.name.replace("COMMEMORATION_", "")),
                 facts={"bonus": bonus, "age": status.age_type},
+            )
+        )
+    return out
+
+
+def great_person_candidates(
+    people: list[lq.GreatPersonInfo], gold: float, faith: float, *, forced: bool
+) -> list[Candidate]:
+    """Recruit with points, patronize with gold or faith, or wait. "Wait" is a
+    real choice and is only dropped when the engine forces a claim."""
+    out: list[Candidate] = []
+    for gp in people:
+        if gp.claimant != "Unclaimed":
+            continue
+        facts = {
+            "class": gp.class_name,
+            "era": gp.era_name,
+            "ability": gp.ability,
+            "points": f"{gp.player_points}/{gp.cost}",
+        }
+        if gp.can_recruit:
+            out.append(
+                Candidate.create(
+                    ActionKind.RECRUIT_GREAT_PERSON,
+                    GreatPersonParams(gp.individual_id, gp.individual_name),
+                    label=f"Recruit {gp.individual_name} ({gp.class_name})",
+                    facts=facts,
+                )
+            )
+        if 0 < gp.gold_cost <= gold:
+            out.append(
+                Candidate.create(
+                    ActionKind.PATRONIZE_GREAT_PERSON,
+                    GreatPersonParams(
+                        gp.individual_id, gp.individual_name, "YIELD_GOLD"
+                    ),
+                    label=f"Patronize {gp.individual_name} with {gp.gold_cost} gold",
+                    facts={**facts, "price": f"{gp.gold_cost} gold of {gold:.0f}"},
+                )
+            )
+        if 0 < gp.faith_cost <= faith:
+            out.append(
+                Candidate.create(
+                    ActionKind.PATRONIZE_GREAT_PERSON,
+                    GreatPersonParams(
+                        gp.individual_id, gp.individual_name, "YIELD_FAITH"
+                    ),
+                    label=f"Patronize {gp.individual_name} with {gp.faith_cost} faith",
+                    facts={**facts, "price": f"{gp.faith_cost} faith of {faith:.0f}"},
+                )
+            )
+    if out and not forced:
+        out.append(
+            Candidate.create(
+                ActionKind.WAIT_GREAT_PERSON,
+                WaitParams("great_people"),
+                label="Wait: keep accumulating points and treasury",
+                facts={},
             )
         )
     return out

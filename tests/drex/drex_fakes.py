@@ -78,6 +78,7 @@ class FakeGame:
         self.promotable: list = []  # Phase 2: units with a promotion available
         self.governor_status = fx.governors(points=0, unassigned=False)
         self.dedication_status = fx.dedications()
+        self.great_people: list = []
         self.fail: dict[str, tuple[Exception, bool]] = {}
         self.ignore: set[str] = set()
         self.end_turn_calls = 0
@@ -278,6 +279,11 @@ class FakeGame:
         if any(u.unit_id == unit_id for u in self.promotable):
             return fx.warrior_promotions()
         return lq.UnitPromotionStatus(unit_id, unit_id % 65536, "UNIT_WARRIOR")
+
+    async def get_great_people(self):
+        self.query_counts["get_great_people"] += 1
+        self.conn.roundtrips += 1
+        return [copy.deepcopy(p) for p in self.great_people]
 
     async def get_dedications(self):
         self.query_counts["get_dedications"] += 1
@@ -493,6 +499,31 @@ class FakeGame:
         self._governor_blockers_done()
         self._after(fail)
         return "PROMOTED|Pingala with Librarian"
+
+    def _claim(self, individual_id):
+        for gp in self.great_people:
+            if gp.individual_id == individual_id:
+                gp.claimant = "Rome"
+                gp.can_recruit = False
+                self.extra_blockers = [
+                    b
+                    for b in self.extra_blockers
+                    if b[0] != "ENDTURN_BLOCKING_CLAIM_GREAT_PERSON"
+                ]
+                return gp
+        return None
+
+    async def recruit_great_person(self, individual_id):
+        fail = self._record("recruit_great_person", individual_id)
+        gp = self._claim(individual_id)
+        self._after(fail)
+        return f"RECRUITED|{gp.individual_name if gp else individual_id}"
+
+    async def patronize_great_person(self, individual_id, yield_type="YIELD_GOLD"):
+        fail = self._record("patronize_great_person", individual_id, yield_type)
+        gp = self._claim(individual_id)
+        self._after(fail)
+        return f"PATRONIZED|{gp.individual_name if gp else individual_id}|{yield_type}"
 
     async def choose_dedication(self, dedication_index):
         fail = self._record("choose_dedication", dedication_index)

@@ -20,6 +20,7 @@ from civ_mcp.drex.enumerate import (
     envoy_candidates,
     government_candidates,
     governor_candidates,
+    great_person_candidates,
     pantheon_candidates,
     policy_candidates,
     production_candidates,
@@ -29,6 +30,7 @@ from civ_mcp.drex.enumerate import (
     unit_candidates,
 )
 from civ_mcp.drex.observation import (
+    CLAIM_BLOCKER,
     CoreObservation,
     DecisionInputs,
     DecisionMemory,
@@ -50,6 +52,7 @@ QUESTIONS: dict[DecisionCategory, str] = {
     DecisionCategory.PROMOTION: "Which promotion should this unit take?",
     DecisionCategory.GOVERNOR: "Which governor action should the empire take?",
     DecisionCategory.DEDICATION: "Which dedication should the empire make for this era?",
+    DecisionCategory.GREAT_PERSON: "Should the empire claim a Great Person now, and how?",
 }
 
 
@@ -117,6 +120,15 @@ def _enumerate(
         )
     if cat is DecisionCategory.PANTHEON and inputs.pantheon is not None:
         return pantheon_candidates(inputs.pantheon), [], entity, inputs
+    if cat is DecisionCategory.GREAT_PERSON and inputs.great_people is not None:
+        forced = CLAIM_BLOCKER in core.blocker_types()
+        cands = great_person_candidates(
+            inputs.great_people,
+            core.overview.gold,
+            core.overview.faith,
+            forced=forced,
+        )
+        return cands, [], entity, inputs
     if cat is DecisionCategory.DEDICATION and inputs.dedications is not None:
         return dedication_candidates(inputs.dedications), [], entity, inputs
     if cat is DecisionCategory.GOVERNOR and inputs.governors is not None:

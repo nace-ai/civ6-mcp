@@ -57,6 +57,9 @@ class CoreObservation:
     # Units with a promotion available; read only while the promotion
     # blocker stands (one GameCore round trip), else empty.
     promotable: list[Any] = field(default_factory=list)
+    # Great People pool; read every 5 turns or while a claim is forced, else
+    # None (not read).
+    great_people: list[Any] | None = None
 
     @property
     def game_identity(self) -> tuple[str, int]:
@@ -77,6 +80,8 @@ class CoreObservation:
 
 
 PROMOTION_BLOCKER = "ENDTURN_BLOCKING_UNIT_PROMOTION"
+CLAIM_BLOCKER = "ENDTURN_BLOCKING_CLAIM_GREAT_PERSON"
+GREAT_PEOPLE_EVERY_TURNS = 5
 
 
 @dataclass

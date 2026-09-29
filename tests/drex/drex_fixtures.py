@@ -480,3 +480,34 @@ def dedications(age: str = "Normal"):
             ),
         ],
     )
+
+
+def great_people():
+    return [
+        lq.GreatPersonInfo(
+            "Great Scientist",
+            "Hypatia",
+            "Classical",
+            60,
+            "Unclaimed",
+            60,
+            "Libraries provide +1 Science",
+            340,
+            0,
+            True,
+            individual_id=7,
+        ),
+        lq.GreatPersonInfo(
+            "Great General",
+            "Boudica",
+            "Classical",
+            60,
+            "Unclaimed",
+            20,
+            "+5 Combat Strength and +1 Movement to nearby units",
+            400,
+            300,
+            False,
+            individual_id=9,
+        ),
+    ]

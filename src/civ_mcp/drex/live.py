@@ -7,6 +7,8 @@ from typing import Any
 
 from civ_mcp.drex.candidates import DecisionCategory
 from civ_mcp.drex.observation import (
+    CLAIM_BLOCKER,
+    GREAT_PEOPLE_EVERY_TURNS,
     PROMOTION_BLOCKER,
     Blocker,
     CoreObservation,
@@ -64,16 +66,22 @@ class LiveObserver:
         )
 
     async def _with_promotable(self, core: CoreObservation) -> CoreObservation:
-        """Read promotable units only while the promotion blocker stands."""
-        if PROMOTION_BLOCKER not in core.blocker_types():
-            return (
-                core
-                if not core.promotable
-                else dataclasses.replace(core, promotable=[])
+        """Read promotable units only while the promotion blocker stands, and
+        the Great People pool every few turns or while a claim is forced."""
+        blockers = core.blocker_types()
+        if PROMOTION_BLOCKER in blockers:
+            core = dataclasses.replace(
+                core, promotable=list(await self.gs.get_promotable_units())
             )
-        return dataclasses.replace(
-            core, promotable=list(await self.gs.get_promotable_units())
-        )
+        elif core.promotable:
+            core = dataclasses.replace(core, promotable=[])
+        if CLAIM_BLOCKER in blockers or (
+            core.great_people is None and core.turn % GREAT_PEOPLE_EVERY_TURNS == 0
+        ):
+            core = dataclasses.replace(
+                core, great_people=list(await self.gs.get_great_people())
+            )
+        return core
 
     def _from_snapshot(self, snap: Any) -> CoreObservation:
         missing = [
@@ -223,6 +231,11 @@ class LiveObserver:
                 return DecisionInputs(pantheon=await gs.get_pantheon_status())
             case DecisionCategory.RESEARCH | DecisionCategory.CIVIC:
                 return DecisionInputs(progress=core.progress)
+            case DecisionCategory.GREAT_PERSON:
+                people = core.great_people
+                if people is None:
+                    people = await gs.get_great_people()
+                return DecisionInputs(great_people=list(people))
             case DecisionCategory.DEDICATION:
                 return DecisionInputs(dedications=await gs.get_dedications())
             case DecisionCategory.GOVERNOR:

@@ -529,6 +529,18 @@ class Executor:
             ):
                 return _ok()
 
+            case ActionKind.RECRUIT_GREAT_PERSON | ActionKind.PATRONIZE_GREAT_PERSON:
+                known = self._known.great_people if self._known is not None else None
+                people = known if known is not None else await gs.get_great_people()
+                gp = next(
+                    (g for g in people if g.individual_id == p.individual_id), None
+                )
+                if gp is None or gp.claimant != "Unclaimed":
+                    return _no("great_person_not_available")
+                if c.kind is ActionKind.RECRUIT_GREAT_PERSON and not gp.can_recruit:
+                    return _no("not_enough_great_person_points")
+                return _ok()
+
             case ActionKind.CHOOSE_DEDICATION:
                 known = self._known.dedications if self._known is not None else None
                 st = known if known is not None else await gs.get_dedications()
@@ -815,6 +827,25 @@ class Executor:
                 if await self._poll(cleared):
                     return confirmed("government_prompt_cleared")
                 return self._unconfirmed(raw, "government_prompt_still_blocking")
+
+            case ActionKind.RECRUIT_GREAT_PERSON | ActionKind.PATRONIZE_GREAT_PERSON:
+                if raw.startswith(
+                    ("RECRUITED|", "PATRONIZED|", "OK:RECRUITED|", "OK:PATRONIZED|")
+                ):
+                    return confirmed("great_person_confirmed_from_dispatch")
+                if _game_error(raw):
+                    return self._unconfirmed(raw, "great_person_refused")
+
+                async def claimed():
+                    people = await gs.get_great_people()
+                    gp = next(
+                        (g for g in people if g.individual_id == p.individual_id), None
+                    )
+                    return gp is None or gp.claimant != "Unclaimed"
+
+                if await self._poll(claimed):
+                    return confirmed("great_person_claimed")
+                return self._unconfirmed(raw, "great_person_not_observed")
 
             case ActionKind.CHOOSE_DEDICATION:
                 if raw.startswith(("DEDICATION_CHOSEN|", "OK:DEDICATION_CHOSEN|")):

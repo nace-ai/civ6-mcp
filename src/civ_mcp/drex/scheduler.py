@@ -21,7 +21,12 @@ from dataclasses import dataclass, field
 
 from civ_mcp.drex.candidates import ActionKind, DecisionCategory
 from civ_mcp.drex.executor import EMPTY_QUEUE_STATES, ActionOutcome, OutcomeStatus
-from civ_mcp.drex.observation import PROMOTION_BLOCKER, CoreObservation, DecisionSpec
+from civ_mcp.drex.observation import (
+    CLAIM_BLOCKER,
+    PROMOTION_BLOCKER,
+    CoreObservation,
+    DecisionSpec,
+)
 
 SCHEDULER_ORDER = (
     "diplomacy: open sessions, ascending player id",
@@ -36,6 +41,7 @@ SCHEDULER_ORDER = (
     "research: only when none selected",
     "civic: only when none selected",
     "production: empty queues, ascending city id",
+    "great_person: forced claim, or once per turn when someone is claimable",
     "unit: moves left, ascending unit id, bounded decisions per unit",
     "end turn",
 )
@@ -68,6 +74,7 @@ SUPPORTED_BLOCKERS = frozenset(
         PROMOTION_BLOCKER,
         *GOVERNOR_BLOCKERS,
         DEDICATION_BLOCKER,
+        CLAIM_BLOCKER,
     }
 )
 # Informational blockers that execute_end_turn clears and logs as housekeeping.
@@ -112,9 +119,23 @@ def key_for(spec: DecisionSpec) -> str:
         DecisionCategory.PANTHEON,
         DecisionCategory.GOVERNOR,
         DecisionCategory.DEDICATION,
+        DecisionCategory.GREAT_PERSON,
     ):
         return str(spec.category)
     return f"{spec.category}:{spec.entity_id}"
+
+
+def _claimable(core: CoreObservation) -> bool:
+    """Someone in the Great People pool can be recruited or bought now."""
+    people = core.great_people or []
+    gold, faith = core.overview.gold, core.overview.faith
+    return any(
+        gp.claimant == "Unclaimed"
+        and (
+            gp.can_recruit or (0 < gp.gold_cost <= gold) or (0 < gp.faith_cost <= faith)
+        )
+        for gp in people
+    )
 
 
 def _informational(session, deal_players: set[int]) -> bool:
@@ -273,6 +294,11 @@ class Scheduler:
             if self._open(ledger, spec):
                 return spec
 
+        if CLAIM_BLOCKER in blockers:
+            spec = DecisionSpec(DecisionCategory.GREAT_PERSON, "empire")
+            if self._open(ledger, spec):
+                return spec
+
         if PROMOTION_BLOCKER in blockers:
             for pu in sorted(core.promotable, key=lambda u: u.unit_id):
                 spec = DecisionSpec(DecisionCategory.PROMOTION, f"unit:{pu.unit_id}")
@@ -294,6 +320,11 @@ class Scheduler:
                 if self._open(ledger, spec):
                     return spec
 
+        if not ledger.great_people_offered and _claimable(core):
+            spec = DecisionSpec(DecisionCategory.GREAT_PERSON, "empire")
+            if self._open(ledger, spec):
+                return spec
+
         for unit in sorted(core.units, key=lambda u: u.unit_id):
             if unit.moves_remaining > 0:
                 spec = DecisionSpec(DecisionCategory.UNIT, f"unit:{unit.unit_id}")
@@ -312,6 +343,9 @@ class Scheduler:
         key = key_for(spec)
         ledger.decisions += 1
         ledger.counts[key] += 1
+        if spec.category is DecisionCategory.GREAT_PERSON:
+            # one Great People decision per turn, whatever its outcome
+            ledger.great_people_offered = True
         if outcome.status not in (OutcomeStatus.CONFIRMED, OutcomeStatus.PENDING):
             ledger.failures[key] += 1
             if candidate_id:
