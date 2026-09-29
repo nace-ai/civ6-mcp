@@ -98,6 +98,7 @@ class DrexConfig:
     timeout_s: float = 15.0
     max_retries: int = 2
     backoff_s: float = 1.0
+    max_backoff_s: float = 60.0
     max_options: int = MAX_CHOICE_OPTIONS
     max_state_chars: int = 60_000
     require_model_prefix: str | None = "drex"
@@ -122,6 +123,7 @@ class DrexConfig:
             model=merged.get("DREX_MODEL", DEFAULT_MODEL),
             timeout_s=float(merged.get("DREX_TIMEOUT_S", 15.0)),
             max_retries=int(merged.get("DREX_MAX_RETRIES", 2)),
+            max_backoff_s=float(merged.get("DREX_MAX_BACKOFF_S", 60.0)),
             max_options=int(merged.get("DREX_MAX_OPTIONS", MAX_CHOICE_OPTIONS)),
         )
 

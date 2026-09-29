@@ -17,7 +17,12 @@ from civ_mcp.drex.observation import CoreObservation, DecisionMemory, Fact
 from civ_mcp.drex.points import build_decision_point
 from civ_mcp.drex.refresh import refresh_parts
 from civ_mcp.drex.scheduler import SCHEDULER_ORDER, EndTurn, Scheduler, Stop, TurnLedger
-from civ_mcp.drex.selectors import SelectionPaused, Selector, build_request, select
+from civ_mcp.drex.selectors import (
+    ControllerFilteringError,
+    Selector,
+    build_request,
+    select,
+)
 from civ_mcp.drex.serialize import to_jsonable
 from civ_mcp.drex.spectate import Spectator, focus_point
 from civ_mcp.end_turn import EndTurnOutcome, execute_end_turn_typed
@@ -122,6 +127,7 @@ class Runner:
         self._t0 = time.perf_counter()
         self._last_core: CoreObservation | None = None
         self._on_turn = on_turn
+        self._current_decision_id: str | None = None
         self._last_observe = {"ms": 0.0, "roundtrips": 0}
         self._turn_stats = {"decisions": 0, "api_ms": 0.0, "roundtrips": 0, "t0": 0.0}
 
@@ -150,6 +156,17 @@ class Runner:
         if self.spectator is not None:
             self.spectator.popup_status(core.popup_state)
         return core
+
+    def selection_waiting(self, info: dict[str, Any]) -> None:
+        """Selector callback: Drex could not answer yet; the run keeps waiting."""
+        self.log.write(
+            "selection_waiting",
+            {
+                **info,
+                "turn": self._last_core.turn if self._last_core else None,
+                "decision_id": self._current_decision_id,
+            },
+        )
 
     def _roundtrips(self) -> int:
         counters = getattr(getattr(self.gs, "conn", None), "snapshot_counters", None)
@@ -391,20 +408,26 @@ class Runner:
                     },
                 )
                 return await self._stop("dry_run_complete", core, checkpoint=False)
+            self._current_decision_id = decision_id
             try:
                 result = await select(point, self.selector)
-            except SelectionPaused as e:
+            except ControllerFilteringError as e:
+                self.scheduler.exhaust(ledger, step)
                 self.log.write(
-                    "selection_paused",
+                    "no_candidates",
                     {
-                        **point.to_record(),
                         "turn": core.turn,
-                        "request": request,
-                        "reason": str(e),
-                        "attempts": e.attempts,
+                        "decision_id": decision_id,
+                        "category": str(step.category),
+                        "entity": step.entity,
+                        "exclusions": [dataclasses.asdict(x) for x in excluded],
+                        "controller_error": str(e),
                     },
                 )
-                return await self._stop(f"selector_paused:{e}", core, checkpoint=True)
+                core = await self._observe(
+                    refresh=(frozenset({"blockers", "popup"}), core)
+                )
+                continue
             api_ms = sum(a.get("latency_ms") or 0.0 for a in result.attempts)
             self._api_ms += api_ms
             observe = dict(self._last_observe)

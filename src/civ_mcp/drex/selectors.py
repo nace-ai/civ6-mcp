@@ -25,12 +25,15 @@ from civ_mcp.drex.decision import (
 )
 
 
-class SelectionPaused(Exception):
-    """No valid decision within the retry bound; the run must pause."""
+class ControllerFilteringError(Exception):
+    """Exactly one candidate survived controller filtering with no forced rule.
 
-    def __init__(self, reason: str, attempts: list[dict[str, Any]] | None = None):
-        super().__init__(reason)
-        self.attempts = attempts or []
+    A controller bug, not an API state: the decision is dropped, never
+    executed without a choice."""
+
+
+class ReplayRejected(Exception):
+    """Offline replay: the recorded answer is missing or invalid."""
 
 
 @dataclass
@@ -86,42 +89,59 @@ def build_request(point: DecisionPoint) -> dict[str, Any]:
 
 
 class DrexSelector:
+    """Asks Drex until it answers with a valid choice.
+
+    Transient failures (429/5xx/529, timeouts, transport errors, malformed
+    bodies or answers) retry with exponential backoff capped at
+    ``max_backoff_s``. Non-retryable failures (bad key, rejected request,
+    model mismatch) wait ``max_backoff_s`` and, when a ``refresh_client``
+    callable is given, rebuild the client so a rotated key or changed base URL
+    is picked up without a restart. Nothing is ever decided without Drex.
+    """
+
     name = "drex"
 
     def __init__(
         self,
         client: ChoiceClient,
         *,
-        max_retries: int = 2,
         backoff_s: float = 1.0,
+        max_backoff_s: float = 60.0,
+        warn_after: int = 2,
         sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep,
+        on_wait: Callable[[dict[str, Any]], None] | None = None,
+        refresh_client: Callable[[], Awaitable[ChoiceClient]] | None = None,
     ):
         self._client = client
-        self._max_retries = max_retries
         self._backoff_s = backoff_s
+        self._max_backoff_s = max_backoff_s
+        self._warn_after = warn_after
         self._sleep = sleep
+        self._on_wait = on_wait
+        self._refresh_client = refresh_client
+
+    def _wait_for(self, n: int) -> float:
+        return min(self._backoff_s * (2**n), self._max_backoff_s)
 
     async def choose(self, point: DecisionPoint) -> SelectionResult:
         request = build_request(point)
         attempts: list[dict[str, Any]] = []
-        for n in range(1 + self._max_retries):
-            wait = self._backoff_s * (2**n)
+        n = 0
+        while True:
             try:
                 answer = await self._client.choose(**request)
                 decision = resolve_choice(point, answer, selector=self.name)
             except DecisionError as e:
-                attempts.append(
-                    {"attempt": n + 1, "ok": False, "error": f"answer: {e}"}
-                )
+                wait, retryable = self._wait_for(n), True
+                err, cls = f"answer: {e}", "DecisionError"
             except DrexError as e:
-                attempts.append(
-                    {"attempt": n + 1, "ok": False, "error": f"{type(e).__name__}: {e}"}
-                )
-                if not e.retryable:
-                    raise SelectionPaused(f"{type(e).__name__}: {e}", attempts)
-                retry_after = getattr(e, "retry_after_s", None)
-                if retry_after:
-                    wait = min(max(wait, retry_after), 30.0)
+                retryable = bool(getattr(e, "retryable", False))
+                retry_after = getattr(e, "retry_after_s", None) or 0.0
+                if retryable:
+                    wait = min(max(self._wait_for(n), retry_after), self._max_backoff_s)
+                else:
+                    wait = self._max_backoff_s
+                err, cls = f"{type(e).__name__}: {e}", type(e).__name__
             else:
                 attempts.append(
                     {
@@ -132,12 +152,24 @@ class DrexSelector:
                     }
                 )
                 return SelectionResult(decision, request, attempts)
-            if n < self._max_retries:
-                await self._sleep(wait)
-        raise SelectionPaused(
-            f"no valid answer after {len(attempts)} attempts: {attempts[-1]['error']}",
-            attempts,
-        )
+            n += 1
+            attempts.append({"attempt": n, "ok": False, "error": err})
+            if len(attempts) > 50:
+                attempts = attempts[-50:]  # bounded record on long outages
+            if self._on_wait is not None:
+                self._on_wait(
+                    {
+                        "attempt": n,
+                        "error": err,
+                        "error_class": cls,
+                        "sleep_s": wait,
+                        "retryable": retryable,
+                        "warn": n >= self._warn_after,
+                    }
+                )
+            await self._sleep(wait)
+            if not retryable and self._refresh_client is not None:
+                self._client = await self._refresh_client()
 
 
 class RandomSelector:
@@ -168,21 +200,21 @@ class ReplaySelector:
     async def choose(self, point: DecisionPoint) -> SelectionResult:
         rec = self._recorded.get(point.decision_id)
         if rec is None:
-            raise SelectionPaused(f"no recorded answer for {point.decision_id}")
+            raise ReplayRejected(f"no recorded answer for {point.decision_id}")
         try:
             if isinstance(rec, str):
                 decision = validate_selection(point, rec, selector=self.name)
             else:
                 decision = resolve_choice(point, rec, selector=self.name)
         except DecisionError as e:
-            raise SelectionPaused(f"recorded answer invalid: {e}") from e
+            raise ReplayRejected(f"recorded answer invalid: {e}") from e
         return SelectionResult(decision)
 
 
 async def select(point: DecisionPoint, selector: Selector) -> SelectionResult:
     if len(point.candidates) == 1:
         if point.forced_rule is None:
-            raise SelectionPaused(
+            raise ControllerFilteringError(
                 f"{point.decision_id}: one candidate left after controller filtering "
                 f"of {point.legal_count} legal options; not executed without a choice"
             )

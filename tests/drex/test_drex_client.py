@@ -265,3 +265,14 @@ def test_invalid_request_is_a_non_retryable_drex_error():
     with pytest.raises(DrexRequestInvalid) as exc:
         _choose(_client(lambda r: httpx.Response(200, json=_ok_body())), {"A": None})
     assert exc.value.retryable is False
+
+
+def test_max_backoff_setting_from_env_and_default():
+    from civ_mcp.drex.client import DrexConfig
+
+    cfg = DrexConfig.from_env({"DREX_API_KEY": "nace_sk_x"}, env_file=None)
+    assert cfg.max_backoff_s == 60.0
+    cfg = DrexConfig.from_env(
+        {"DREX_API_KEY": "nace_sk_x", "DREX_MAX_BACKOFF_S": "30"}, env_file=None
+    )
+    assert cfg.max_backoff_s == 30.0

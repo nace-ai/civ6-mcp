@@ -9,7 +9,7 @@ from drex_fakes import FakeGame
 from civ_mcp.drex.decision import validate_selection
 from civ_mcp.drex.decision_log import DecisionLog
 from civ_mcp.drex.runner import RunConfig, Runner
-from civ_mcp.drex.selectors import SelectionPaused, SelectionResult
+from civ_mcp.drex.selectors import SelectionResult
 from civ_mcp.end_turn import EndTurnOutcome
 
 
@@ -27,13 +27,6 @@ class PreferSelector:
         ids = sorted(c.candidate_id for c in point.candidates)
         pick = next((i for p in self.prefixes for i in ids if i.startswith(p)), ids[0])
         return SelectionResult(validate_selection(point, pick, selector=self.name))
-
-
-class PausingSelector:
-    name = "pausing"
-
-    async def choose(self, point):
-        raise SelectionPaused("DrexAuthError: HTTP 401", [{"attempt": 1, "ok": False}])
 
 
 def _fake_end_turn(game):
@@ -151,12 +144,37 @@ def test_unsupported_blocker_checkpoints_and_stops(tmp_path):
     assert game.end_turn_calls == 0
 
 
-def test_selector_pause_checkpoints_and_stops_without_fallback(tmp_path):
+def test_selector_waits_are_logged_and_the_run_continues(tmp_path):
     game = FakeGame()
-    runner, checkpoints = _runner(game, tmp_path, selector=PausingSelector())
+
+    class FlakySelector(PreferSelector):
+        def __init__(self):
+            super().__init__()
+            self.failed = False
+            self.on_wait = None
+
+        async def choose(self, point):
+            if not self.failed:
+                self.failed = True
+                self.on_wait(
+                    {
+                        "attempt": 1,
+                        "error": "HTTP 429",
+                        "error_class": "DrexUnavailable",
+                        "sleep_s": 1.0,
+                        "retryable": True,
+                    }
+                )
+            return await super().choose(point)
+
+    sel = FlakySelector()
+    runner, checkpoints = _runner(game, tmp_path, selector=sel)
+    sel.on_wait = runner.selection_waiting
     result = asyncio.run(runner.run())
-    assert result.stop_reason.startswith("selector_paused")
-    assert checkpoints and game.calls == []
+    assert result.stop_reason == "turn_budget_reached" and checkpoints == []
+    waits = [r for r in _records(tmp_path) if r["type"] == "selection_waiting"]
+    assert waits and waits[0]["error_class"] == "DrexUnavailable"
+    assert "decision_id" in waits[0] and waits[0]["turn"] == 5
 
 
 def test_dry_run_never_mutates(tmp_path):

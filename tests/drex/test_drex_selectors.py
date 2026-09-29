@@ -1,4 +1,4 @@
-"""Selectors: bounded retries then pause; never a silent fallback."""
+"""Selectors: Drex is waited for, never replaced; no silent fallback."""
 
 import asyncio
 
@@ -17,7 +17,8 @@ from civ_mcp.drex.selectors import (
     DrexSelector,
     RandomSelector,
     ReplaySelector,
-    SelectionPaused,
+    ControllerFilteringError,
+    ReplayRejected,
     select,
 )
 
@@ -70,8 +71,11 @@ async def _no_sleep(_):
     return None
 
 
-def _drex(client, retries=2) -> DrexSelector:
-    return DrexSelector(client, max_retries=retries, backoff_s=0.0, sleep=_no_sleep)
+def _drex(client, **kw) -> DrexSelector:
+    kw.setdefault("backoff_s", 1.0)
+    kw.setdefault("max_backoff_s", 60.0)
+    kw.setdefault("sleep", _no_sleep)
+    return DrexSelector(client, **kw)
 
 
 def test_request_sends_labels_as_options_and_context_as_state():
@@ -119,28 +123,6 @@ def test_transient_failure_is_retried_within_bound():
     assert [a["ok"] for a in result.attempts] == [False, True]
 
 
-def test_exhausted_retries_pause_without_a_decision():
-    client = _ScriptedClient(*(DrexUnavailable("timeout") for _ in range(3)))
-    with pytest.raises(SelectionPaused) as exc:
-        asyncio.run(_drex(client, retries=2).choose(_point()))
-    assert len(client.calls) == 3
-    assert len(exc.value.attempts) == 3
-
-
-def test_invalid_answers_are_retried_then_pause():
-    client = _ScriptedClient(MISSING_OPTION, MISSING_OPTION)
-    with pytest.raises(SelectionPaused, match="missing"):
-        asyncio.run(_drex(client, retries=1).choose(_point()))
-    assert len(client.calls) == 2
-
-
-def test_non_retryable_error_pauses_immediately():
-    client = _ScriptedClient(DrexAuthError("HTTP 401"), GOOD)
-    with pytest.raises(SelectionPaused):
-        asyncio.run(_drex(client).choose(_point()))
-    assert len(client.calls) == 1
-
-
 def test_random_baseline_is_labeled_and_order_invariant():
     a = asyncio.run(RandomSelector(seed=7).choose(_point()))
     b = asyncio.run(
@@ -162,9 +144,9 @@ def test_single_candidate_is_forced_without_consulting_selector():
 def test_replay_revalidates_recorded_answers():
     ok = asyncio.run(ReplaySelector({"T3#2": GOOD}).choose(_point()))
     assert ok.decision.selector == "replay"
-    with pytest.raises(SelectionPaused):
+    with pytest.raises(ReplayRejected):
         asyncio.run(ReplaySelector({"T3#2": MISSING_OPTION}).choose(_point()))
-    with pytest.raises(SelectionPaused):
+    with pytest.raises(ReplayRejected):
         asyncio.run(ReplaySelector({}).choose(_point()))
 
 
@@ -183,17 +165,65 @@ def test_single_candidate_left_by_filtering_is_not_forced():
         legal_count=2,
     )
     client = _ScriptedClient()
-    with pytest.raises(SelectionPaused):
+    with pytest.raises(ControllerFilteringError):
         asyncio.run(select(point, _drex(client)))
     assert client.calls == []
 
 
-def test_invalid_request_pauses_without_retry():
+# ------------------------------------------------- waits, never pauses (A1)
+def test_429_storm_ends_in_a_decision_not_a_pause():
+    client = _ScriptedClient(*(DrexUnavailable("HTTP 429") for _ in range(5)), GOOD)
+    waits = []
+    result = asyncio.run(_drex(client, on_wait=waits.append).choose(_point()))
+    assert result.decision.candidate_id == "research:TECHNOLOGY_POTTERY"
+    assert len(client.calls) == 6 and len(waits) == 5
+    assert [w["sleep_s"] for w in waits] == [1.0, 2.0, 4.0, 8.0, 16.0]
+    assert all(w["retryable"] for w in waits)
+
+
+def test_backoff_is_capped_and_honours_retry_after():
+    errs = [DrexUnavailable("HTTP 429", retry_after_s=90.0)] + [
+        DrexUnavailable("HTTP 529") for _ in range(7)
+    ]
+    client = _ScriptedClient(*errs, GOOD)
+    waits = []
+    asyncio.run(_drex(client, on_wait=waits.append).choose(_point()))
+    assert waits[0]["sleep_s"] == 60.0  # retry-after 90 capped to max_backoff
+    assert max(w["sleep_s"] for w in waits) == 60.0
+
+
+def test_auth_error_refreshes_client_and_continues():
+    bad = _ScriptedClient(DrexAuthError("HTTP 401: bad key"))
+    good = _ScriptedClient(GOOD)
+    refreshed = []
+
+    async def refresh():
+        refreshed.append(True)
+        return good
+
+    waits = []
+    result = asyncio.run(
+        _drex(bad, refresh_client=refresh, on_wait=waits.append).choose(_point())
+    )
+    assert result.decision.candidate_id == "research:TECHNOLOGY_POTTERY"
+    assert refreshed == [True]
+    assert waits[0]["retryable"] is False and waits[0]["sleep_s"] == 60.0
+
+
+def test_every_wait_is_reported():
+    client = _ScriptedClient(MISSING_OPTION, DrexUnavailable("timeout"), GOOD)
+    waits = []
+    asyncio.run(_drex(client, on_wait=waits.append).choose(_point()))
+    assert [w["error_class"] for w in waits] == ["DecisionError", "DrexUnavailable"]
+    assert all({"attempt", "error", "sleep_s", "retryable"} <= set(w) for w in waits)
+
+
+def test_invalid_request_is_a_non_retryable_wait():
     from civ_mcp.drex.client import DrexRequestInvalid
 
     client = _ScriptedClient(
         DrexRequestInvalid("256 options exceed the limit of 255"), GOOD
     )
-    with pytest.raises(SelectionPaused):
-        asyncio.run(_drex(client).choose(_point()))
-    assert len(client.calls) == 1
+    waits = []
+    asyncio.run(_drex(client, on_wait=waits.append).choose(_point()))
+    assert len(client.calls) == 2 and waits[0]["retryable"] is False

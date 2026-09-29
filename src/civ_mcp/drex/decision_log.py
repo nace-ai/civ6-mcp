@@ -42,6 +42,11 @@ class DecisionLog:
         self._secrets = list(secrets)
         self._seq = 0
 
+    def add_secret(self, value: str) -> None:
+        """Redact another value (e.g. a rotated API key) from later records."""
+        if value and value not in self._secrets:
+            self._secrets.append(value)
+
     def write(self, record_type: str, payload: dict[str, Any]) -> None:
         self._seq += 1
         record = {

@@ -135,7 +135,17 @@ async def _run_live(args: argparse.Namespace, *, dry_run: bool) -> int:
     secrets: list[str] = []
     client = None
     selector = None
+    runner: Runner | None = None
     max_options = args.max_options
+    log_path = Path(args.log_dir) / f"{run_id}.jsonl"
+    log = DecisionLog(log_path, run_id=run_id, secrets=secrets)
+
+    def _on_wait(info: dict[str, Any]) -> None:
+        if runner is not None:
+            runner.selection_waiting(info)
+        if info.get("warn"):
+            _err(f"waiting for Drex: {info['error']} (retry in {info['sleep_s']:.0f}s)")
+
     use_drex = (not dry_run and args.selector == "drex") or (dry_run and args.call_drex)
     if use_drex:
         try:
@@ -145,8 +155,26 @@ async def _run_live(args: argparse.Namespace, *, dry_run: bool) -> int:
             return 2
         secrets.append(cfg.api_key)
         client = DrexClient(cfg)
+
+        async def _refresh_client() -> DrexClient:
+            # Non-retryable Drex errors: re-read the env file so a rotated key
+            # or changed base URL is picked up without restarting the run.
+            nonlocal client, cfg
+            new_cfg = _load_config(args)
+            if client is not None:
+                await client.aclose()
+            cfg = new_cfg
+            client = DrexClient(cfg)
+            log.add_secret(cfg.api_key)
+            return client
+
         selector = DrexSelector(
-            client, max_retries=cfg.max_retries, backoff_s=cfg.backoff_s
+            client,
+            backoff_s=cfg.backoff_s,
+            max_backoff_s=cfg.max_backoff_s,
+            warn_after=cfg.max_retries,
+            on_wait=lambda info: _on_wait(info),
+            refresh_client=_refresh_client,
         )
         meta["drex"] = _config_summary(cfg)
         max_options = min(max_options, cfg.max_options)
@@ -155,10 +183,10 @@ async def _run_live(args: argparse.Namespace, *, dry_run: bool) -> int:
         meta["baseline"] = {"selector": "random-baseline", "seed": args.seed}
     env_key = os.environ.get("DREX_API_KEY")
     if env_key:
-        secrets.append(env_key)
+        log.add_secret(env_key)
+    for secret in secrets:
+        log.add_secret(secret)
 
-    log_path = Path(args.log_dir) / f"{run_id}.jsonl"
-    log = DecisionLog(log_path, run_id=run_id, secrets=secrets)
     conn = GameConnection(args.host, args.port)
     try:
         await conn.connect()
