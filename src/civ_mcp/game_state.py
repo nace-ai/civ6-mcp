@@ -11,11 +11,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from dataclasses import dataclass, field
 
 from typing import TYPE_CHECKING
 
 from civ_mcp import lua as lq
 from civ_mcp.connection import GameConnection
+from civ_mcp.lua.batch import build_batch, split_batch
+from civ_mcp.spectator import POPUP_STATUS_LUA
 from civ_mcp.narrate import (
     narrate_combat_estimate,
     narrate_move_discoveries,
@@ -27,6 +30,66 @@ if TYPE_CHECKING:
     from civ_mcp.spatial import SpatialTracker
 
 log = logging.getLogger(__name__)
+
+
+IDENTITY_LUA = (
+    "local me = Game.GetLocalPlayer() "
+    "local cfg = PlayerConfigurations[me] "
+    'print("GAMESEED|" .. cfg:GetCivilizationTypeName() '
+    '.. "|" .. tostring(GameConfiguration.GetValue("GAME_SYNC_RANDOM_SEED"))) '
+    'print("---END---")'
+)
+
+# Parts of the decision loop's observation, batched into one InGame and one
+# GameCore round trip by ``GameState.get_core_snapshot``.
+CORE_PARTS = frozenset(
+    {
+        "identity",
+        "overview",
+        "cities",
+        "units",
+        "sessions",
+        "deals",
+        "blockers",
+        "tech",
+        "progress",
+        "popup",
+    }
+)
+_INGAME_SECTIONS = (
+    ("identity", lambda: IDENTITY_LUA),
+    ("overview", lq.build_overview_query),
+    ("cities", lq.build_cities_query),
+    ("units", lq.build_units_query),
+    ("sessions", lq.build_diplomacy_session_query),
+    ("deals", lq.build_pending_deals_query),
+    ("blockers", lq.build_end_turn_blocking_query),
+    ("popup", lambda: POPUP_STATUS_LUA),
+)
+_GAMECORE_SECTIONS = (
+    ("tech", lq.build_tech_civics_query),
+    ("progress", lq.build_progress_types_query),
+)
+
+
+@dataclass
+class CoreSnapshot:
+    """One batched read of the decision loop's inputs. ``None`` marks a part
+    that was not requested or whose section raised (see ``errors``)."""
+
+    civ: str
+    seed: int
+    overview: lq.GameOverview | None = None
+    tech: lq.TechCivicStatus | None = None
+    progress: lq.ProgressTypes | None = None
+    cities: list[lq.CityInfo] | None = None
+    units: list[lq.UnitInfo] | None = None
+    sessions: list[lq.DiplomacySession] | None = None
+    deals: list[lq.PendingDeal] | None = None
+    blockers: list[tuple[str, str]] | None = None
+    popup_state: str | None = None
+    errors: dict[str, str] = field(default_factory=dict)
+    roundtrips: int = 0
 
 
 class GameState:
@@ -75,20 +138,15 @@ class GameState:
         Always queries the game so we detect new-game loads.  When the
         identity changes, all per-game cached state is reset.
         """
-        code = (
-            "local me = Game.GetLocalPlayer() "
-            "local cfg = PlayerConfigurations[me] "
-            'print("GAMESEED|" .. cfg:GetCivilizationTypeName() '
-            '.. "|" .. tostring(GameConfiguration.GetValue("GAME_SYNC_RANDOM_SEED"))) '
-            'print("---END---")'
-        )
-        lines = await self.conn.execute_write(code)
+        lines = await self.conn.execute_write(IDENTITY_LUA)
+        return self._apply_identity(lines)
+
+    def _apply_identity(self, lines: list[str]) -> tuple[str, int]:
         for line in lines:
             if line.startswith("GAMESEED|"):
                 parts = line.split("|")
                 civ = parts[1].replace("CIVILIZATION_", "").lower()
-                seed = int(parts[2])
-                new_id = (civ, seed)
+                new_id = (civ, int(parts[2]))
                 if self._game_identity is not None and new_id != self._game_identity:
                     log.info("Game changed: %s → %s", self._game_identity, new_id)
                     self._last_snapshot = None
@@ -101,6 +159,67 @@ class GameState:
                 self._game_identity = new_id
                 return self._game_identity
         return ("unknown", 0)
+
+    async def get_core_snapshot(
+        self, parts: frozenset[str] = CORE_PARTS
+    ) -> CoreSnapshot:
+        """Everything the decision loop observes, in at most two round trips
+        (one InGame, one GameCore). Unrequested parts are None."""
+        want = set(parts) | {"identity"}
+        sections: dict[str, list[str]] = {}
+        errors: dict[str, str] = {}
+        trips = 0
+        ingame = [(n, b()) for n, b in _INGAME_SECTIONS if n in want]
+        if ingame:
+            lines = await self.conn.execute_write(build_batch(ingame), timeout=10.0)
+            s, e = split_batch(lines)
+            sections.update(s)
+            errors.update(e)
+            trips += 1
+        gamecore = [(n, b()) for n, b in _GAMECORE_SECTIONS if n in want]
+        if gamecore:
+            lines = await self.conn.execute_read(build_batch(gamecore), timeout=10.0)
+            s, e = split_batch(lines)
+            sections.update(s)
+            errors.update(e)
+            trips += 1
+
+        def got(name: str) -> bool:
+            return name in sections and name not in errors
+
+        civ, seed = self._apply_identity(sections.get("identity", []))
+        snap = CoreSnapshot(civ=civ, seed=seed, errors=errors, roundtrips=trips)
+        if got("overview"):
+            snap.overview = lq.parse_overview_response(sections["overview"])
+            if self._last_snapshot is None:
+                try:
+                    self._last_snapshot = await self._take_snapshot(snap.overview)
+                except Exception:
+                    log.debug("Failed to bootstrap snapshot", exc_info=True)
+        if got("tech"):
+            snap.tech = lq.parse_tech_civics_response(sections["tech"])
+        if got("progress"):
+            snap.progress = lq.parse_progress_types(sections["progress"])
+        if got("cities"):
+            snap.cities = lq.parse_cities_response(sections["cities"])[0]
+        if got("units"):
+            snap.units = lq.parse_units_response(sections["units"])
+        if got("sessions"):
+            snap.sessions = lq.parse_diplomacy_sessions(sections["sessions"])
+        if got("deals"):
+            snap.deals = lq.parse_pending_deals_response(sections["deals"])
+        if got("blockers"):
+            snap.blockers = lq.parse_end_turn_blocking(sections["blockers"])
+        if got("popup"):
+            snap.popup_state = next(
+                (
+                    ln.strip()
+                    for ln in sections["popup"]
+                    if ln.strip() in ("CLEAR", "POPUP", "CRITICAL")
+                ),
+                "CLEAR",
+            )
+        return snap
 
     # ------------------------------------------------------------------
     # Query methods
@@ -1685,7 +1804,9 @@ class GameState:
         return lq.parse_progress_types(lines)
 
     async def check_eligibility(self, kind: str, type_name: str) -> tuple[bool, str]:
-        lines = await self.conn.execute_read(lq.build_eligibility_query(kind, type_name))
+        lines = await self.conn.execute_read(
+            lq.build_eligibility_query(kind, type_name)
+        )
         return lq.parse_eligibility(lines)
 
     async def get_wonder_types(self) -> set[str]:

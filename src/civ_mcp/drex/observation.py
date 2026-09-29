@@ -53,6 +53,7 @@ class CoreObservation:
     diplomacy_sessions: list[lq.DiplomacySession] = field(default_factory=list)
     pending_deals: list[lq.PendingDeal] = field(default_factory=list)
     blockers: list[Blocker] = field(default_factory=list)
+    popup_state: str = "CLEAR"
 
     @property
     def game_identity(self) -> tuple[str, int]:

@@ -30,6 +30,8 @@ class LiveObserver:
 
     async def core(self) -> CoreObservation:
         gs = self.gs
+        if hasattr(gs, "get_core_snapshot"):
+            return self._from_snapshot(await gs.get_core_snapshot())
         civ, seed = await gs.get_game_identity()
         overview = await gs.get_game_overview()
         tech = await gs.get_tech_civics()
@@ -54,6 +56,43 @@ class LiveObserver:
             diplomacy_sessions=sessions,
             pending_deals=deals,
             blockers=[Blocker(t, m) for t, m in blockers],
+        )
+
+    def _from_snapshot(self, snap: Any) -> CoreObservation:
+        missing = [
+            p
+            for p in (
+                "overview",
+                "tech",
+                "progress",
+                "cities",
+                "units",
+                "sessions",
+                "deals",
+                "blockers",
+            )
+            if getattr(snap, p) is None
+        ]
+        if missing:
+            raise ConnectionError(
+                f"core snapshot incomplete: {missing}; errors={snap.errors}"
+            )
+        self._counter += 1
+        self._version = f"{snap.civ}:{snap.seed}:T{snap.overview.turn}:{self._counter}"
+        return CoreObservation(
+            version=self._version,
+            civ=snap.civ,
+            seed=snap.seed,
+            local_player_id=snap.overview.player_id,
+            overview=snap.overview,
+            tech=snap.tech,
+            progress=snap.progress,
+            cities=snap.cities,
+            units=snap.units,
+            diplomacy_sessions=snap.sessions,
+            pending_deals=snap.deals,
+            blockers=[Blocker(t, m) for t, m in snap.blockers],
+            popup_state=snap.popup_state or "CLEAR",
         )
 
     async def reactive(self, previous: CoreObservation) -> CoreObservation:

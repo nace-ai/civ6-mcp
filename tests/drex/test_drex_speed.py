@@ -84,3 +84,61 @@ def test_drain_waits_are_short(monkeypatch):
     asyncio.run(c.execute_write("print('x')"))
     assert waits == [GameConnection.PRE_DRAIN_S, GameConnection.POST_DRAIN_S]
     assert GameConnection.PRE_DRAIN_S <= 0.02 and GameConnection.POST_DRAIN_S <= 0.05
+
+
+# ---------------------------------------------------------------- snapshot
+class _SnapshotGame:
+    """A game that offers the batched snapshot; counts how often it is used."""
+
+    def __init__(self, base):
+        self.base = base
+        self.snapshot_calls = []
+
+    def __getattr__(self, name):
+        return getattr(self.base, name)
+
+    async def get_core_snapshot(self, parts=None):
+        from civ_mcp.game_state import CORE_PARTS, CoreSnapshot
+
+        parts = parts or CORE_PARTS
+        self.snapshot_calls.append(frozenset(parts))
+        b = self.base
+        civ, seed = await b.get_game_identity()
+        return CoreSnapshot(
+            civ=civ,
+            seed=seed,
+            overview=await b.get_game_overview() if "overview" in parts else None,
+            tech=await b.get_tech_civics() if "tech" in parts else None,
+            progress=await b.get_progress_types() if "progress" in parts else None,
+            cities=(await b.get_cities())[0] if "cities" in parts else None,
+            units=await b.get_units() if "units" in parts else None,
+            sessions=await b.get_diplomacy_sessions() if "sessions" in parts else None,
+            deals=await b.get_pending_deals() if "deals" in parts else None,
+            blockers=await b.get_end_turn_blockers() if "blockers" in parts else None,
+            popup_state="POPUP" if "popup" in parts else None,
+            errors={},
+            roundtrips=2,
+        )
+
+
+def test_live_observer_uses_snapshot_when_available():
+    from drex_fakes import FakeGame
+
+    from civ_mcp.drex.live import LiveObserver
+
+    game = _SnapshotGame(FakeGame())
+    obs = LiveObserver(game)
+    core = asyncio.run(obs.core())
+    assert game.snapshot_calls and core.civ == "rome" and core.turn == 5
+    assert core.popup_state == "POPUP"
+    assert len(core.units) == 3 and core.cities[0].name == "Roma"
+
+
+def test_live_observer_falls_back_to_individual_queries_without_snapshot():
+    from drex_fakes import FakeGame
+
+    from civ_mcp.drex.live import LiveObserver
+
+    game = FakeGame()
+    core = asyncio.run(LiveObserver(game).core())
+    assert core.popup_state == "CLEAR" and core.turn == 5

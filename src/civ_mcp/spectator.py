@@ -62,7 +62,7 @@ _CRITICAL_SCREENS = [
 ]
 
 # Lua snippet that returns CLEAR / POPUP / CRITICAL in one roundtrip.
-_POPUP_POLL_LUA = (
+POPUP_STATUS_LUA = (
     "local r='CLEAR' "
     + "".join(
         f"do local c=ContextPtr:LookUpControl('/InGame/{n}') "
@@ -78,6 +78,7 @@ _POPUP_POLL_LUA = (
     + "end "
     + f"print(r) print('{SENTINEL}')"
 )
+_POPUP_POLL_LUA = POPUP_STATUS_LUA
 
 # Lua snippet to check for active diplomacy screens (used by camera).
 _DIPLOMACY_CHECK_LUA = (
