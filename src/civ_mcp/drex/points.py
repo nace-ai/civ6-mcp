@@ -18,6 +18,7 @@ from civ_mcp.drex.enumerate import (
     diplomacy_candidates,
     envoy_candidates,
     government_candidates,
+    governor_candidates,
     pantheon_candidates,
     policy_candidates,
     production_candidates,
@@ -46,6 +47,7 @@ QUESTIONS: dict[DecisionCategory, str] = {
     DecisionCategory.GOVERNMENT: "Should the empire change its government now?",
     DecisionCategory.PANTHEON: "Which pantheon belief should the empire adopt?",
     DecisionCategory.PROMOTION: "Which promotion should this unit take?",
+    DecisionCategory.GOVERNOR: "Which governor action should the empire take?",
 }
 
 
@@ -113,6 +115,8 @@ def _enumerate(
         )
     if cat is DecisionCategory.PANTHEON and inputs.pantheon is not None:
         return pantheon_candidates(inputs.pantheon), [], entity, inputs
+    if cat is DecisionCategory.GOVERNOR and inputs.governors is not None:
+        return governor_candidates(inputs.governors, core.cities), [], entity, inputs
     if cat is DecisionCategory.PROMOTION and inputs.promotable and inputs.promotions:
         return (
             promotion_candidates(inputs.promotable, inputs.promotions),

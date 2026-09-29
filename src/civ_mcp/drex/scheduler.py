@@ -31,6 +31,7 @@ SCHEDULER_ORDER = (
     "envoy: when GIVE_INFLUENCE_TOKEN blocks",
     "pantheon: when PANTHEON blocks",
     "promotion: when UNIT_PROMOTION blocks, ascending unit id",
+    "governor: when a GOVERNOR_* blocker stands (appoint / assign / promote)",
     "research: only when none selected",
     "civic: only when none selected",
     "production: empty queues, ascending city id",
@@ -42,6 +43,14 @@ GOVERNMENT_BLOCKER = "ENDTURN_BLOCKING_CONSIDER_GOVERNMENT_CHANGE"
 POLICY_BLOCKER = "ENDTURN_BLOCKING_FILL_CIVIC_SLOT"
 ENVOY_BLOCKER = "ENDTURN_BLOCKING_GIVE_INFLUENCE_TOKEN"
 PANTHEON_BLOCKER = "ENDTURN_BLOCKING_PANTHEON"
+GOVERNOR_BLOCKERS = frozenset(
+    {
+        "ENDTURN_BLOCKING_GOVERNOR_APPOINTMENT",
+        "ENDTURN_BLOCKING_GOVERNOR_IDLE",
+        "ENDTURN_BLOCKING_GOVERNOR_OPPORTUNITY",
+        "ENDTURN_BLOCKING_GOVERNOR_PROMOTION",
+    }
+)
 
 SUPPORTED_BLOCKERS = frozenset(
     {
@@ -55,6 +64,7 @@ SUPPORTED_BLOCKERS = frozenset(
         ENVOY_BLOCKER,
         PANTHEON_BLOCKER,
         PROMOTION_BLOCKER,
+        *GOVERNOR_BLOCKERS,
     }
 )
 # Informational blockers that execute_end_turn clears and logs as housekeeping.
@@ -97,6 +107,7 @@ def key_for(spec: DecisionSpec) -> str:
         DecisionCategory.POLICY,
         DecisionCategory.ENVOY,
         DecisionCategory.PANTHEON,
+        DecisionCategory.GOVERNOR,
     ):
         return str(spec.category)
     return f"{spec.category}:{spec.entity_id}"
@@ -125,12 +136,14 @@ class Scheduler:
         max_failures_per_key: int = 2,
         max_diplomacy_rounds: int = 4,
         max_repeat_decisions: int = 6,
+        max_governor_decisions: int = 5,
     ):
         self.max_unit_decisions = max_unit_decisions
         self.max_decisions_per_turn = max_decisions_per_turn
         self.max_failures_per_key = max_failures_per_key
         self.max_diplomacy_rounds = max_diplomacy_rounds
         self.max_repeat_decisions = max_repeat_decisions
+        self.max_governor_decisions = max_governor_decisions
 
     def _limit(self, spec: DecisionSpec) -> int | None:
         match spec.category:
@@ -142,6 +155,8 @@ class Scheduler:
                 return self.max_repeat_decisions
             case DecisionCategory.PROMOTION:
                 return 2
+            case DecisionCategory.GOVERNOR:
+                return self.max_governor_decisions
         return None
 
     def _open(self, ledger: TurnLedger, spec: DecisionSpec) -> bool:
@@ -244,6 +259,11 @@ class Scheduler:
             if blocker in blockers and self._open(ledger, spec):
                 return spec
 
+        if blockers & GOVERNOR_BLOCKERS:
+            spec = DecisionSpec(DecisionCategory.GOVERNOR, "empire")
+            if self._open(ledger, spec):
+                return spec
+
         if PROMOTION_BLOCKER in blockers:
             for pu in sorted(core.promotable, key=lambda u: u.unit_id):
                 spec = DecisionSpec(DecisionCategory.PROMOTION, f"unit:{pu.unit_id}")
@@ -297,6 +317,7 @@ class Scheduler:
             DecisionCategory.DIPLOMACY,
             DecisionCategory.POLICY,
             DecisionCategory.ENVOY,
+            DecisionCategory.GOVERNOR,
         ):
             ledger.resolved.add(key)
 

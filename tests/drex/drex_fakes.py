@@ -76,6 +76,7 @@ class FakeGame:
         self.pantheon_status = fx.pantheon()
         self.extra_blockers: list[tuple[str, str]] = []
         self.promotable: list = []  # Phase 2: units with a promotion available
+        self.governor_status = fx.governors(points=0, unassigned=False)
         self.fail: dict[str, tuple[Exception, bool]] = {}
         self.ignore: set[str] = set()
         self.end_turn_calls = 0
@@ -277,6 +278,11 @@ class FakeGame:
             return fx.warrior_promotions()
         return lq.UnitPromotionStatus(unit_id, unit_id % 65536, "UNIT_WARRIOR")
 
+    async def get_governors(self):
+        self.query_counts["get_governors"] += 1
+        self.conn.roundtrips += 1
+        return copy.deepcopy(self.governor_status)
+
     # ---------------------------------------------------------------- actions
     async def dismiss_popup(self):
         self._record("dismiss_popup")
@@ -427,6 +433,60 @@ class FakeGame:
         ]
         self._after(fail)
         return "GOVERNMENT_CHANGE_CONSIDERED"
+
+    def _governor_blockers_done(self):
+        st = self.governor_status
+        busy = st.can_appoint or any(
+            g.assigned_city_id == -1
+            or (st.points_available > 0 and g.available_promotions)
+            for g in st.appointed
+        )
+        if not busy:
+            self.extra_blockers = [
+                b for b in self.extra_blockers if "GOVERNOR" not in b[0]
+            ]
+
+    async def appoint_governor(self, governor_type):
+        fail = self._record("appoint_governor", governor_type)
+        st = self.governor_status
+        st.appointed.append(
+            lq.AppointedGovernor(
+                governor_type, governor_type.title(), -1, "Unassigned", False
+            )
+        )
+        st.available_to_appoint = [
+            g for g in st.available_to_appoint if g.governor_type != governor_type
+        ]
+        st.points_available -= 1
+        st.can_appoint = st.points_available > 0 and bool(st.available_to_appoint)
+        self._governor_blockers_done()
+        self._after(fail)
+        return "APPOINTED|Victor (Castellan)"
+
+    async def assign_governor(self, governor_type, city_id):
+        fail = self._record("assign_governor", governor_type, city_id)
+        for g in self.governor_status.appointed:
+            if g.governor_type == governor_type:
+                g.assigned_city_id = city_id
+                g.assigned_city_name = self.cities[city_id].name
+        self._governor_blockers_done()
+        self._after(fail)
+        return "ASSIGNED|Pingala to Roma"
+
+    async def promote_governor(self, governor_type, promotion_type):
+        fail = self._record("promote_governor", governor_type, promotion_type)
+        st = self.governor_status
+        for g in st.appointed:
+            if g.governor_type == governor_type:
+                g.available_promotions = [
+                    p
+                    for p in g.available_promotions
+                    if p.promotion_type != promotion_type
+                ]
+        st.points_available -= 1
+        self._governor_blockers_done()
+        self._after(fail)
+        return "PROMOTED|Pingala with Librarian"
 
     async def promote_unit(self, unit_id, promotion_type):
         fail = self._record("promote_unit", unit_id, promotion_type)

@@ -11,6 +11,8 @@ from typing import Any
 from civ_mcp import lua as lq
 from civ_mcp.drex.candidates import (
     ActionKind,
+    AppointGovernorParams,
+    AssignGovernorParams,
     AttackParams,
     Candidate,
     CivicParams,
@@ -25,6 +27,7 @@ from civ_mcp.drex.candidates import (
     PantheonParams,
     PolicyParams,
     ProductionParams,
+    PromoteGovernorParams,
     PromoteParams,
     ResearchParams,
     UnitOrderParams,
@@ -406,6 +409,52 @@ def promotion_candidates(unit: Any, status: lq.UnitPromotionStatus) -> list[Cand
         )
         for p in status.promotions
     ]
+
+
+def governor_candidates(
+    status: lq.GovernorStatus, cities: list[lq.CityInfo]
+) -> list[Candidate]:
+    """Every governor action the engine allows right now: appoint (points
+    available), assign an unplaced governor to a city without one, promote
+    (points available)."""
+    out: list[Candidate] = []
+    if status.can_appoint and status.points_available > 0:
+        for g in status.available_to_appoint:
+            out.append(
+                Candidate.create(
+                    ActionKind.APPOINT_GOVERNOR,
+                    AppointGovernorParams(g.governor_type),
+                    label=f"Appoint {g.name} ({g.title})",
+                    facts={"ability": g.base_ability, "effect": g.base_ability_desc},
+                )
+            )
+    governed = {
+        g.assigned_city_id for g in status.appointed if g.assigned_city_id != -1
+    }
+    for g in status.appointed:
+        if g.assigned_city_id == -1:
+            for city in sorted(cities, key=lambda c: c.city_id):
+                if city.city_id in governed:
+                    continue
+                out.append(
+                    Candidate.create(
+                        ActionKind.ASSIGN_GOVERNOR,
+                        AssignGovernorParams(g.governor_type, city.city_id),
+                        label=f"Assign {g.name} to {city.name}",
+                        facts={"city": city.name, "population": city.population},
+                    )
+                )
+        if status.points_available > 0:
+            for pr in g.available_promotions:
+                out.append(
+                    Candidate.create(
+                        ActionKind.PROMOTE_GOVERNOR,
+                        PromoteGovernorParams(g.governor_type, pr.promotion_type),
+                        label=f"Promote {g.name}: {pr.name}",
+                        facts={"effect": pr.description, "level": pr.level},
+                    )
+                )
+    return out
 
 
 def pantheon_candidates(status: lq.PantheonStatus) -> list[Candidate]:

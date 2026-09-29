@@ -529,6 +529,43 @@ class Executor:
             ):
                 return _ok()
 
+            case (
+                ActionKind.APPOINT_GOVERNOR
+                | ActionKind.ASSIGN_GOVERNOR
+                | ActionKind.PROMOTE_GOVERNOR
+            ):
+                known = self._known.governors if self._known is not None else None
+                st = known if known is not None else await gs.get_governors()
+                if c.kind is ActionKind.APPOINT_GOVERNOR:
+                    if not (st.can_appoint and st.points_available > 0):
+                        return _no("no_governor_points")
+                    if not any(
+                        g.governor_type == p.governor_type
+                        for g in st.available_to_appoint
+                    ):
+                        return _no("governor_not_available")
+                    return _ok()
+                gov = next(
+                    (g for g in st.appointed if g.governor_type == p.governor_type),
+                    None,
+                )
+                if gov is None:
+                    return _no("governor_not_appointed")
+                if c.kind is ActionKind.ASSIGN_GOVERNOR:
+                    if gov.assigned_city_id != -1:
+                        return _no("governor_already_assigned")
+                    if any(g.assigned_city_id == p.city_id for g in st.appointed):
+                        return _no("city_already_governed")
+                    return _ok()
+                if st.points_available <= 0:
+                    return _no("no_governor_points")
+                if not any(
+                    pr.promotion_type == p.promotion_type
+                    for pr in gov.available_promotions
+                ):
+                    return _no("promotion_not_available")
+                return _ok()
+
             case ActionKind.PROMOTE_UNIT:
                 fresh = await gs.get_promotable_units()
                 if not any(u.unit_id == p.unit.unit_id for u in fresh):
@@ -767,6 +804,40 @@ class Executor:
                 if await self._poll(cleared):
                     return confirmed("government_prompt_cleared")
                 return self._unconfirmed(raw, "government_prompt_still_blocking")
+
+            case (
+                ActionKind.APPOINT_GOVERNOR
+                | ActionKind.ASSIGN_GOVERNOR
+                | ActionKind.PROMOTE_GOVERNOR
+            ):
+                first = raw.splitlines()[0] if raw else ""
+                if first.startswith(("APPOINTED|", "ASSIGNED|", "PROMOTED|")):
+                    return confirmed("governor_confirmed_from_dispatch")
+                if _game_error(raw):
+                    return self._unconfirmed(raw, "governor_action_refused")
+
+                async def applied():
+                    st = await gs.get_governors()
+                    if c.kind is ActionKind.APPOINT_GOVERNOR:
+                        return any(
+                            g.governor_type == p.governor_type for g in st.appointed
+                        )
+                    gov = next(
+                        (g for g in st.appointed if g.governor_type == p.governor_type),
+                        None,
+                    )
+                    if gov is None:
+                        return False
+                    if c.kind is ActionKind.ASSIGN_GOVERNOR:
+                        return gov.assigned_city_id == p.city_id
+                    return not any(
+                        pr.promotion_type == p.promotion_type
+                        for pr in gov.available_promotions
+                    )
+
+                if await self._poll(applied):
+                    return confirmed("governor_readback_confirmed")
+                return self._unconfirmed(raw, "governor_action_not_observed")
 
             case ActionKind.PROMOTE_UNIT:
                 if raw.startswith(("PROMOTED|", "OK:PROMOTED|")):

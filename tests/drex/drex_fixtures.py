@@ -416,3 +416,39 @@ def warrior_promotions():
         xp_needed=15,
         promotion_count=1,
     )
+
+
+def governors(points: int = 0, unassigned: bool = False):
+    promo = lq.GovernorPromotion(
+        "GOVERNOR_PROMOTION_EDUCATOR_LIBRARIAN",
+        "Librarian",
+        "+1 Science per Citizen in this city",
+        1,
+        0,
+    )
+    return lq.GovernorStatus(
+        points_available=points,
+        points_spent=1,
+        can_appoint=points > 0,
+        appointed=[
+            lq.AppointedGovernor(
+                "GOVERNOR_THE_EDUCATOR",
+                "Pingala",
+                -1 if unassigned else CAPITAL_ID,
+                "Unassigned" if unassigned else "Roma",
+                not unassigned,
+                0,
+                [promo] if points > 0 else [],
+            )
+        ],
+        available_to_appoint=[
+            lq.GovernorInfo(
+                "GOVERNOR_THE_DEFENDER",
+                "Victor",
+                "Castellan",
+                "Military governor",
+                "Redoubt",
+                "+5 Combat Strength for units within the city",
+            )
+        ],
+    )

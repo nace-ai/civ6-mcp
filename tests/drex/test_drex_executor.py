@@ -19,6 +19,7 @@ from civ_mcp.drex.enumerate import (
     diplomacy_candidates,
     envoy_candidates,
     government_candidates,
+    governor_candidates,
     pantheon_candidates,
     policy_candidates,
     production_candidates,
@@ -181,6 +182,28 @@ DISPATCH_CASES.append(
         ("heal_unit", (fx.WARRIOR_IDX,)),
     )
 )
+_GOV_CANDS = governor_candidates(
+    fx.governors(points=1, unassigned=True), [fx.capital()]
+)
+DISPATCH_CASES.extend(
+    [
+        (
+            _cand(_GOV_CANDS, ActionKind.APPOINT_GOVERNOR),
+            ("appoint_governor", ("GOVERNOR_THE_DEFENDER",)),
+        ),
+        (
+            _cand(_GOV_CANDS, ActionKind.ASSIGN_GOVERNOR),
+            ("assign_governor", ("GOVERNOR_THE_EDUCATOR", fx.CAPITAL_ID)),
+        ),
+        (
+            _cand(_GOV_CANDS, ActionKind.PROMOTE_GOVERNOR),
+            (
+                "promote_governor",
+                ("GOVERNOR_THE_EDUCATOR", "GOVERNOR_PROMOTION_EDUCATOR_LIBRARIAN"),
+            ),
+        ),
+    ]
+)
 DISPATCH_CASES.append(
     (
         _cand(
@@ -211,9 +234,6 @@ NO_DISPATCH_KINDS = {
 # Phase 2 kinds whose candidate builders and fakes land in later tasks; each
 # task removes its kinds here and adds them to DISPATCH_CASES.
 PENDING_KINDS = {
-    ActionKind.APPOINT_GOVERNOR,
-    ActionKind.ASSIGN_GOVERNOR,
-    ActionKind.PROMOTE_GOVERNOR,
     ActionKind.CHOOSE_DEDICATION,
     ActionKind.RECRUIT_GREAT_PERSON,
     ActionKind.PATRONIZE_GREAT_PERSON,
@@ -241,6 +261,7 @@ def test_executor_performs_the_mapped_call_and_confirms_or_acknowledges(cand, ex
     if cand.kind is ActionKind.HEAL_UNIT:
         game.spaces[fx.WARRIOR_IDX] = _wounded_space()
     game.promotable = [fx.promotable_warrior()]
+    game.governor_status = fx.governors(points=1, unassigned=True)
     outcome = _run(game, cand)
     assert game.calls == [expected]
     assert outcome.dispatched is True

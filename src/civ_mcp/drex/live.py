@@ -223,6 +223,8 @@ class LiveObserver:
                 return DecisionInputs(pantheon=await gs.get_pantheon_status())
             case DecisionCategory.RESEARCH | DecisionCategory.CIVIC:
                 return DecisionInputs(progress=core.progress)
+            case DecisionCategory.GOVERNOR:
+                return DecisionInputs(governors=await gs.get_governors())
             case DecisionCategory.PROMOTION:
                 unit_id = int(eid.split(":", 1)[1]) if isinstance(eid, str) else eid
                 pu = next((u for u in core.promotable if u.unit_id == unit_id), None)
