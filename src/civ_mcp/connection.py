@@ -28,6 +28,12 @@ class LuaError(Exception):
 class GameConnection:
     """Persistent FireTuner TCP connection to Civ 6."""
 
+    # A round trip used to spend 0.3 s in these two drains alone. The sentinel
+    # delimits every response, so the drains only need to catch bytes that are
+    # already buffered.
+    PRE_DRAIN_S = 0.01
+    POST_DRAIN_S = 0.02
+
     def __init__(self, host: str = "127.0.0.1", port: int = 4318):
         self.host = host
         self.port = port
@@ -196,7 +202,7 @@ class GameConnection:
         assert self._writer is not None
 
         # Drain any stale messages
-        await tuner_client.drain_messages(self._reader, timeout=0.1)
+        await tuner_client.drain_messages(self._reader, timeout=self.PRE_DRAIN_S)
 
         await tuner_client.send_message(
             self._writer, tuner_client.TAG_COMMAND, f"CMD:{state_index}:{lua_code}"
@@ -227,7 +233,7 @@ class GameConnection:
             # Ignore non-output messages (e.g. tag=3 empty ack)
 
         # Drain any trailing unsolicited output
-        await tuner_client.drain_messages(self._reader, timeout=0.2)
+        await tuner_client.drain_messages(self._reader, timeout=self.POST_DRAIN_S)
         return lines
 
 

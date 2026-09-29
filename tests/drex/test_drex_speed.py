@@ -67,3 +67,20 @@ def test_each_execute_counts_one_roundtrip_and_records_time(monkeypatch):
     assert c.roundtrips == 1 and c.roundtrip_ms >= 0.0
     asyncio.run(c.execute_read("print('y')"))
     assert c.snapshot_counters()[0] == 2
+
+
+def test_drain_waits_are_short(monkeypatch):
+    from civ_mcp import connection as conn_mod
+
+    waits = []
+
+    async def drain_messages(reader, timeout=0.5):
+        waits.append(timeout)
+        return []
+
+    _fake_wire(monkeypatch, ["A"])
+    monkeypatch.setattr(conn_mod.tuner_client, "drain_messages", drain_messages)
+    c = _connected()
+    asyncio.run(c.execute_write("print('x')"))
+    assert waits == [GameConnection.PRE_DRAIN_S, GameConnection.POST_DRAIN_S]
+    assert GameConnection.PRE_DRAIN_S <= 0.02 and GameConnection.POST_DRAIN_S <= 0.05
