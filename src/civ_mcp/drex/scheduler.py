@@ -38,6 +38,8 @@ SCHEDULER_ORDER = (
     "promotion: when UNIT_PROMOTION blocks, ascending unit id",
     "governor: when a GOVERNOR_* blocker stands (appoint / assign / promote)",
     "dedication: when COMMEMORATION_AVAILABLE blocks",
+    "religion: when RELIGION blocks (religion, follower belief, then found)",
+    "belief: when BELIEF blocks",
     "research: only when none selected",
     "civic: only when none selected",
     "production: empty queues, ascending city id",
@@ -51,6 +53,8 @@ POLICY_BLOCKER = "ENDTURN_BLOCKING_FILL_CIVIC_SLOT"
 ENVOY_BLOCKER = "ENDTURN_BLOCKING_GIVE_INFLUENCE_TOKEN"
 PANTHEON_BLOCKER = "ENDTURN_BLOCKING_PANTHEON"
 DEDICATION_BLOCKER = "ENDTURN_BLOCKING_COMMEMORATION_AVAILABLE"
+RELIGION_BLOCKER = "ENDTURN_BLOCKING_RELIGION"
+BELIEF_BLOCKER = "ENDTURN_BLOCKING_BELIEF"
 GOVERNOR_BLOCKERS = frozenset(
     {
         "ENDTURN_BLOCKING_GOVERNOR_APPOINTMENT",
@@ -75,6 +79,8 @@ SUPPORTED_BLOCKERS = frozenset(
         *GOVERNOR_BLOCKERS,
         DEDICATION_BLOCKER,
         CLAIM_BLOCKER,
+        RELIGION_BLOCKER,
+        BELIEF_BLOCKER,
     }
 )
 # Informational blockers that execute_end_turn clears and logs as housekeeping.
@@ -120,6 +126,8 @@ def key_for(spec: DecisionSpec) -> str:
         DecisionCategory.GOVERNOR,
         DecisionCategory.DEDICATION,
         DecisionCategory.GREAT_PERSON,
+        DecisionCategory.RELIGION,
+        DecisionCategory.BELIEF,
     ):
         return str(spec.category)
     return f"{spec.category}:{spec.entity_id}"
@@ -182,6 +190,8 @@ class Scheduler:
                 return 2
             case DecisionCategory.GOVERNOR:
                 return self.max_governor_decisions
+            case DecisionCategory.RELIGION:
+                return 3  # religion, follower belief, founder belief + found
         return None
 
     def _open(self, ledger: TurnLedger, spec: DecisionSpec) -> bool:
@@ -299,6 +309,19 @@ class Scheduler:
             if self._open(ledger, spec):
                 return spec
 
+        if RELIGION_BLOCKER in blockers:
+            spec = DecisionSpec(DecisionCategory.RELIGION, "empire")
+            if self._open(ledger, spec):
+                return spec
+        elif ledger.religion_partial:
+            # the founding prompt is gone: partial choices are stale
+            ledger.religion_partial.clear()
+
+        if BELIEF_BLOCKER in blockers:
+            spec = DecisionSpec(DecisionCategory.BELIEF, "empire")
+            if self._open(ledger, spec):
+                return spec
+
         if PROMOTION_BLOCKER in blockers:
             for pu in sorted(core.promotable, key=lambda u: u.unit_id):
                 spec = DecisionSpec(DecisionCategory.PROMOTION, f"unit:{pu.unit_id}")
@@ -361,6 +384,7 @@ class Scheduler:
             DecisionCategory.POLICY,
             DecisionCategory.ENVOY,
             DecisionCategory.GOVERNOR,
+            DecisionCategory.RELIGION,  # resolved by the runner after FOUND_RELIGION
         ):
             ledger.resolved.add(key)
 

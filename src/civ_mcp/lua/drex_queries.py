@@ -80,3 +80,19 @@ def parse_promotable_units(lines: list[str]) -> list[PromotableUnit]:
             )
         )
     return out
+
+
+def build_add_belief(belief_type: str) -> str:
+    """InGame: add a belief to the player's religion (enhancer, worship, a
+    second follower belief...) through the same PlayerOperation
+    ``build_found_religion`` uses for its beliefs."""
+    return f"""
+local me = Game.GetLocalPlayer()
+local b = GameInfo.Beliefs["{belief_type}"]
+if not b then print("ERR:BELIEF_NOT_FOUND|{belief_type}"); print("{SENTINEL}"); return end
+local p = {{}}
+p[PlayerOperations.PARAM_BELIEF_TYPE] = b.Hash
+UI.RequestPlayerOperation(me, PlayerOperations.ADD_BELIEF, p)
+print("OK:BELIEF_ADDED|" .. Locale.Lookup(b.Name))
+print("{SENTINEL}")
+"""

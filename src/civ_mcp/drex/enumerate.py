@@ -14,6 +14,7 @@ from civ_mcp.drex.candidates import (
     AppointGovernorParams,
     AssignGovernorParams,
     AttackParams,
+    BeliefParams,
     Candidate,
     CivicParams,
     DealParams,
@@ -21,6 +22,7 @@ from civ_mcp.drex.candidates import (
     DiplomacyParams,
     EnvoyParams,
     Exclusion,
+    FoundReligionParams,
     GovernmentParams,
     GreatPersonParams,
     ImproveParams,
@@ -31,6 +33,7 @@ from civ_mcp.drex.candidates import (
     ProductionParams,
     PromoteGovernorParams,
     PromoteParams,
+    ReligionChoiceParams,
     ResearchParams,
     UnitOrderParams,
     UnitRef,
@@ -538,6 +541,69 @@ def great_person_candidates(
                 facts={},
             )
         )
+    return out
+
+
+def religion_candidates(
+    status: lq.ReligionFoundingStatus, partial: dict[str, str]
+) -> list[Candidate]:
+    """Founding a religion in three Drex steps: the religion, one follower
+    belief, then the founder belief (which dispatches ``found_religion`` with
+    the two stored choices). Each step stays under the option limit."""
+    if status.has_religion:
+        return []
+    religion = partial.get("religion_type")
+    follower = partial.get("follower_belief")
+    if religion is None:
+        return [
+            Candidate.create(
+                ActionKind.CHOOSE_RELIGION,
+                ReligionChoiceParams(rtype),
+                label=name or pretty(rtype),
+                facts={"step": "1 of 3: religion"},
+            )
+            for rtype, name in status.available_religions
+        ]
+    if follower is None:
+        return [
+            Candidate.create(
+                ActionKind.CHOOSE_FOLLOWER_BELIEF,
+                BeliefParams(b.belief_type, b.belief_class),
+                label=b.name or pretty(b.belief_type),
+                facts={"effect": b.description, "step": "2 of 3: follower belief"},
+            )
+            for b in status.beliefs_by_class.get("BELIEF_CLASS_FOLLOWER", [])
+        ]
+    return [
+        Candidate.create(
+            ActionKind.FOUND_RELIGION,
+            FoundReligionParams(religion, follower, b.belief_type),
+            label=b.name or pretty(b.belief_type),
+            facts={
+                "effect": b.description,
+                "step": "3 of 3: founder belief, then found",
+                "religion": religion,
+                "follower_belief": follower,
+            },
+        )
+        for b in status.beliefs_by_class.get("BELIEF_CLASS_FOUNDER", [])
+    ]
+
+
+def belief_candidates(status: lq.ReligionFoundingStatus) -> list[Candidate]:
+    """Add a belief to an existing religion: every available belief of every
+    class the engine still offers."""
+    out: list[Candidate] = []
+    for cls in sorted(status.beliefs_by_class):
+        for b in status.beliefs_by_class[cls]:
+            out.append(
+                Candidate.create(
+                    ActionKind.ADD_BELIEF,
+                    BeliefParams(b.belief_type, cls),
+                    label=f"{b.name or pretty(b.belief_type)} ({pretty(cls.replace('BELIEF_CLASS_', ''))})",
+                    facts={"effect": b.description, "class": cls},
+                )
+            )
     return out
 
 

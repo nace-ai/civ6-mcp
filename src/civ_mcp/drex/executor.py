@@ -529,6 +529,47 @@ class Executor:
             ):
                 return _ok()
 
+            case ActionKind.FOUND_RELIGION:
+                known = self._known.religion if self._known is not None else None
+                st = (
+                    known
+                    if known is not None
+                    else await gs.get_religion_founding_status()
+                )
+                if st.has_religion:
+                    return _no("religion_already_founded")
+                if p.religion_type not in {r for r, _ in st.available_religions}:
+                    return _no("religion_not_available")
+                followers = {
+                    b.belief_type
+                    for b in st.beliefs_by_class.get("BELIEF_CLASS_FOLLOWER", [])
+                }
+                founders = {
+                    b.belief_type
+                    for b in st.beliefs_by_class.get("BELIEF_CLASS_FOUNDER", [])
+                }
+                if (
+                    p.follower_belief not in followers
+                    or p.founder_belief not in founders
+                ):
+                    return _no("belief_not_available")
+                return _ok()
+
+            case ActionKind.ADD_BELIEF:
+                known = self._known.religion if self._known is not None else None
+                st = (
+                    known
+                    if known is not None
+                    else await gs.get_religion_founding_status()
+                )
+                if not any(
+                    b.belief_type == p.belief_type
+                    for beliefs in st.beliefs_by_class.values()
+                    for b in beliefs
+                ):
+                    return _no("belief_not_available")
+                return _ok()
+
             case ActionKind.RECRUIT_GREAT_PERSON | ActionKind.PATRONIZE_GREAT_PERSON:
                 known = self._known.great_people if self._known is not None else None
                 people = known if known is not None else await gs.get_great_people()
@@ -827,6 +868,37 @@ class Executor:
                 if await self._poll(cleared):
                     return confirmed("government_prompt_cleared")
                 return self._unconfirmed(raw, "government_prompt_still_blocking")
+
+            case ActionKind.FOUND_RELIGION:
+                if raw.startswith(("RELIGION_FOUNDED|", "OK:RELIGION_FOUNDED|")):
+                    return confirmed("religion_founded_from_dispatch")
+                if _game_error(raw):
+                    return self._unconfirmed(raw, "founding_refused")
+
+                async def founded():
+                    return (await gs.get_religion_founding_status()).has_religion
+
+                if await self._poll(founded):
+                    return confirmed("religion_observed")
+                return self._unconfirmed(raw, "religion_not_observed")
+
+            case ActionKind.ADD_BELIEF:
+                if raw.startswith(("BELIEF_ADDED|", "OK:BELIEF_ADDED|")):
+                    return confirmed("belief_added_from_dispatch")
+                if _game_error(raw):
+                    return self._unconfirmed(raw, "belief_refused")
+
+                async def gone():
+                    st = await gs.get_religion_founding_status()
+                    return not any(
+                        b.belief_type == p.belief_type
+                        for beliefs in st.beliefs_by_class.values()
+                        for b in beliefs
+                    )
+
+                if await self._poll(gone):
+                    return confirmed("belief_no_longer_offered")
+                return self._unconfirmed(raw, "belief_not_observed")
 
             case ActionKind.RECRUIT_GREAT_PERSON | ActionKind.PATRONIZE_GREAT_PERSON:
                 if raw.startswith(

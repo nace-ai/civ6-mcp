@@ -13,7 +13,7 @@ from typing import Any
 from civ_mcp.connection import LuaError
 from civ_mcp.drex.candidates import ActionKind, DecisionCategory
 from civ_mcp.drex.decision_log import DecisionLog
-from civ_mcp.drex.executor import Executor, dispatch_call
+from civ_mcp.drex.executor import Executor, OutcomeStatus, dispatch_call
 from civ_mcp.drex.live import LiveObserver
 from civ_mcp.drex.observation import (
     CoreObservation,
@@ -24,7 +24,13 @@ from civ_mcp.drex.observation import (
 )
 from civ_mcp.drex.points import build_decision_point
 from civ_mcp.drex.refresh import refresh_parts
-from civ_mcp.drex.scheduler import SCHEDULER_ORDER, EndTurn, Scheduler, TurnLedger
+from civ_mcp.drex.scheduler import (
+    SCHEDULER_ORDER,
+    EndTurn,
+    Scheduler,
+    TurnLedger,
+    key_for,
+)
 from civ_mcp.drex.selectors import (
     ControllerFilteringError,
     Selector,
@@ -251,6 +257,19 @@ class Runner:
                 ):
                     return task.result()
         return await self.observer.inputs(step, core)
+
+    def _record_religion_step(
+        self, ledger: TurnLedger, step: DecisionSpec, candidate: Any
+    ) -> None:
+        """Keep the stored choices of the three-step religion founding."""
+        kind = candidate.kind
+        if kind is ActionKind.CHOOSE_RELIGION:
+            ledger.religion_partial["religion_type"] = candidate.params.religion_type
+        elif kind is ActionKind.CHOOSE_FOLLOWER_BELIEF:
+            ledger.religion_partial["follower_belief"] = candidate.params.belief_type
+        elif kind is ActionKind.FOUND_RELIGION:
+            ledger.religion_partial.clear()
+            ledger.resolved.add(key_for(step))
 
     async def _wait_unsupported(
         self, core: CoreObservation, blockers: list[str]
@@ -625,6 +644,10 @@ class Runner:
                 continue
 
             inputs = await self._take_inputs(step, core)
+            if step.category is DecisionCategory.RELIGION:
+                inputs = dataclasses.replace(
+                    inputs, religion_partial=dict(ledger.religion_partial)
+                )
             self._seq += 1
             decision_id = f"T{core.turn}#{self._seq:04d}"
             point, excluded = build_decision_point(
@@ -743,6 +766,8 @@ class Runner:
             self.scheduler.note(
                 ledger, step, candidate.kind, outcome, candidate.candidate_id
             )
+            if outcome.status is OutcomeStatus.CONFIRMED:
+                self._record_religion_step(ledger, step, candidate)
             self.memory.record(
                 Fact(
                     core.turn,

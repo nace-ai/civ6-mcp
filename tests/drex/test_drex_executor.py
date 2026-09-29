@@ -14,6 +14,7 @@ from civ_mcp.drex.candidates import (
     KeepGovernmentParams,
 )
 from civ_mcp.drex.enumerate import (
+    belief_candidates,
     civic_candidates,
     deal_candidates,
     dedication_candidates,
@@ -26,6 +27,7 @@ from civ_mcp.drex.enumerate import (
     policy_candidates,
     production_candidates,
     promotion_candidates,
+    religion_candidates,
     research_candidates,
     unit_candidates,
 )
@@ -194,6 +196,33 @@ DISPATCH_CASES.append(
         ("choose_dedication", (0,)),
     )
 )
+_FOUND = religion_candidates(
+    fx.religion_founding(),
+    {"religion_type": "RELIGION_BUDDHISM", "follower_belief": "BELIEF_CHORAL_MUSIC"},
+)
+DISPATCH_CASES.extend(
+    [
+        (
+            _cand(
+                _FOUND,
+                ActionKind.FOUND_RELIGION,
+                lambda c: c.params.founder_belief == "BELIEF_TITHE",
+            ),
+            (
+                "found_religion",
+                ("RELIGION_BUDDHISM", "BELIEF_CHORAL_MUSIC", "BELIEF_TITHE"),
+            ),
+        ),
+        (
+            _cand(
+                belief_candidates(fx.religion_founding()),
+                ActionKind.ADD_BELIEF,
+                lambda c: c.params.belief_type == "BELIEF_MISSIONARY_ZEAL",
+            ),
+            ("add_belief", ("BELIEF_MISSIONARY_ZEAL",)),
+        ),
+    ]
+)
 _GP_CANDS = great_person_candidates(fx.great_people(), gold=1000, faith=0, forced=False)
 DISPATCH_CASES.extend(
     [
@@ -263,8 +292,6 @@ NO_DISPATCH_KINDS = {
 # Phase 2 kinds whose candidate builders and fakes land in later tasks; each
 # task removes its kinds here and adds them to DISPATCH_CASES.
 PENDING_KINDS = {
-    ActionKind.FOUND_RELIGION,
-    ActionKind.ADD_BELIEF,
     ActionKind.CITY_ATTACK,
 }
 

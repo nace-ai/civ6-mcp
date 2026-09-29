@@ -511,3 +511,37 @@ def great_people():
             individual_id=9,
         ),
     ]
+
+
+def religion_founding():
+    def opt(cls, t, name):
+        return lq.ReligionBeliefOption(cls, t, name, f"{name} effect")
+
+    return lq.ReligionFoundingStatus(
+        has_religion=False,
+        religion_type=None,
+        religion_name=None,
+        pantheon_index=3,
+        faith_balance=120.0,
+        available_religions=[
+            ("RELIGION_BUDDHISM", "Buddhism"),
+            ("RELIGION_TAOISM", "Taoism"),
+        ],
+        beliefs_by_class={
+            "BELIEF_CLASS_FOLLOWER": [
+                opt("BELIEF_CLASS_FOLLOWER", "BELIEF_CHORAL_MUSIC", "Choral Music"),
+                opt("BELIEF_CLASS_FOLLOWER", "BELIEF_FEED_THE_WORLD", "Feed the World"),
+            ],
+            "BELIEF_CLASS_FOUNDER": [
+                opt("BELIEF_CLASS_FOUNDER", "BELIEF_TITHE", "Tithe"),
+                opt(
+                    "BELIEF_CLASS_FOUNDER", "BELIEF_CHURCH_PROPERTY", "Church Property"
+                ),
+            ],
+            "BELIEF_CLASS_ENHANCER": [
+                opt(
+                    "BELIEF_CLASS_ENHANCER", "BELIEF_MISSIONARY_ZEAL", "Missionary Zeal"
+                ),
+            ],
+        },
+    )

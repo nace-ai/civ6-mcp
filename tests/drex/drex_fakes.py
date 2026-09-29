@@ -79,6 +79,7 @@ class FakeGame:
         self.governor_status = fx.governors(points=0, unassigned=False)
         self.dedication_status = fx.dedications()
         self.great_people: list = []
+        self.religion_status = fx.religion_founding()
         self.fail: dict[str, tuple[Exception, bool]] = {}
         self.ignore: set[str] = set()
         self.end_turn_calls = 0
@@ -279,6 +280,11 @@ class FakeGame:
         if any(u.unit_id == unit_id for u in self.promotable):
             return fx.warrior_promotions()
         return lq.UnitPromotionStatus(unit_id, unit_id % 65536, "UNIT_WARRIOR")
+
+    async def get_religion_founding_status(self):
+        self.query_counts["get_religion_founding_status"] += 1
+        self.conn.roundtrips += 1
+        return copy.deepcopy(self.religion_status)
 
     async def get_great_people(self):
         self.query_counts["get_great_people"] += 1
@@ -499,6 +505,41 @@ class FakeGame:
         self._governor_blockers_done()
         self._after(fail)
         return "PROMOTED|Pingala with Librarian"
+
+    async def found_religion(self, religion_type, follower_belief, founder_belief):
+        fail = self._record(
+            "found_religion", religion_type, follower_belief, founder_belief
+        )
+        st = self.religion_status
+        st.has_religion = True
+        st.religion_type = religion_type
+        st.religion_name = dict(st.available_religions).get(
+            religion_type, religion_type
+        )
+        for cls in ("BELIEF_CLASS_FOLLOWER", "BELIEF_CLASS_FOUNDER"):
+            st.beliefs_by_class[cls] = [
+                b
+                for b in st.beliefs_by_class.get(cls, [])
+                if b.belief_type not in (follower_belief, founder_belief)
+            ]
+        self.extra_blockers = [
+            b for b in self.extra_blockers if b[0] != "ENDTURN_BLOCKING_RELIGION"
+        ]
+        self._after(fail)
+        return f"RELIGION_FOUNDED|{st.religion_name}|{follower_belief}|{founder_belief}"
+
+    async def add_belief(self, belief_type):
+        fail = self._record("add_belief", belief_type)
+        st = self.religion_status
+        for cls, beliefs in st.beliefs_by_class.items():
+            st.beliefs_by_class[cls] = [
+                b for b in beliefs if b.belief_type != belief_type
+            ]
+        self.extra_blockers = [
+            b for b in self.extra_blockers if b[0] != "ENDTURN_BLOCKING_BELIEF"
+        ]
+        self._after(fail)
+        return f"BELIEF_ADDED|{belief_type}"
 
     def _claim(self, individual_id):
         for gp in self.great_people:

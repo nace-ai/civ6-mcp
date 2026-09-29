@@ -13,6 +13,7 @@ from civ_mcp.drex.candidates import (
     Exclusion,
 )
 from civ_mcp.drex.enumerate import (
+    belief_candidates,
     civic_candidates,
     deal_candidates,
     dedication_candidates,
@@ -25,6 +26,7 @@ from civ_mcp.drex.enumerate import (
     policy_candidates,
     production_candidates,
     promotion_candidates,
+    religion_candidates,
     research_candidates,
     shortlist,
     unit_candidates,
@@ -53,6 +55,8 @@ QUESTIONS: dict[DecisionCategory, str] = {
     DecisionCategory.GOVERNOR: "Which governor action should the empire take?",
     DecisionCategory.DEDICATION: "Which dedication should the empire make for this era?",
     DecisionCategory.GREAT_PERSON: "Should the empire claim a Great Person now, and how?",
+    DecisionCategory.RELIGION: "Which choice should the empire make to found its religion?",
+    DecisionCategory.BELIEF: "Which belief should the empire add to its religion?",
 }
 
 
@@ -120,6 +124,11 @@ def _enumerate(
         )
     if cat is DecisionCategory.PANTHEON and inputs.pantheon is not None:
         return pantheon_candidates(inputs.pantheon), [], entity, inputs
+    if cat is DecisionCategory.RELIGION and inputs.religion is not None:
+        partial = inputs.religion_partial or {}
+        return religion_candidates(inputs.religion, partial), [], entity, inputs
+    if cat is DecisionCategory.BELIEF and inputs.religion is not None:
+        return belief_candidates(inputs.religion), [], entity, inputs
     if cat is DecisionCategory.GREAT_PERSON and inputs.great_people is not None:
         forced = CLAIM_BLOCKER in core.blocker_types()
         cands = great_person_candidates(

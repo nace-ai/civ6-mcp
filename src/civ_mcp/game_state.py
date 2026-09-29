@@ -166,6 +166,11 @@ class GameState:
         lines = await self.conn.execute_read(lq_drex.build_promotable_units_query())
         return lq_drex.parse_promotable_units(lines)
 
+    async def add_belief(self, belief_type: str) -> str:
+        """InGame: add a belief to our religion."""
+        lines = await self.conn.execute_write(lq_drex.build_add_belief(belief_type))
+        return _action_result(lines)
+
     async def get_core_snapshot(
         self, parts: frozenset[str] = CORE_PARTS
     ) -> CoreSnapshot:

@@ -231,6 +231,8 @@ class LiveObserver:
                 return DecisionInputs(pantheon=await gs.get_pantheon_status())
             case DecisionCategory.RESEARCH | DecisionCategory.CIVIC:
                 return DecisionInputs(progress=core.progress)
+            case DecisionCategory.RELIGION | DecisionCategory.BELIEF:
+                return DecisionInputs(religion=await gs.get_religion_founding_status())
             case DecisionCategory.GREAT_PERSON:
                 people = core.great_people
                 if people is None:
