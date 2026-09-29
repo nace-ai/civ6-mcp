@@ -394,7 +394,11 @@ class Runner:
                 return await self._stop("dry_run_complete", core, checkpoint=False)
 
             outcome = await self.executor.execute(
-                candidate, point, current_version=self.observer.version, turn=core.turn
+                candidate,
+                point,
+                current_version=self.observer.version,
+                turn=core.turn,
+                inputs=inputs,
             )
             self._game_ms += outcome.elapsed_ms
             self._decisions += 1

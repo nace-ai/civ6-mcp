@@ -89,6 +89,7 @@ class DecisionInputs:
     slot_index: int | None = None
     governments: list[lq.GovernmentOption] | None = None
     envoys: lq.EnvoyStatus | None = None
+    progress: lq.ProgressTypes | None = None
     pantheon: lq.PantheonStatus | None = None
 
 

@@ -199,4 +199,6 @@ class LiveObserver:
                 return DecisionInputs(envoys=await gs.get_city_states())
             case DecisionCategory.PANTHEON:
                 return DecisionInputs(pantheon=await gs.get_pantheon_status())
+            case DecisionCategory.RESEARCH | DecisionCategory.CIVIC:
+                return DecisionInputs(progress=core.progress)
         return DecisionInputs()

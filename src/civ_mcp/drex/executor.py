@@ -45,6 +45,7 @@ from civ_mcp.drex.candidates import (
     UnitRef,
 )
 from civ_mcp.drex.decision import StaleDecision, ensure_current
+from civ_mcp.drex.observation import DecisionInputs
 
 EMPTY_QUEUE_STATES = frozenset({"nothing", "NONE", "CORRUPTED_QUEUE", ""})
 CONSIDER_GOVERNMENT = "ENDTURN_BLOCKING_CONSIDER_GOVERNMENT_CHANGE"
@@ -176,6 +177,9 @@ class Executor:
         self._poll_interval_s = poll_interval_s
         self._sleep = sleep
         self._dispatched: set[tuple[int, str, Any]] = set()
+        # Reads made for the decision itself, reusable by the precheck while
+        # the observation they were taken from is still current.
+        self._known: DecisionInputs | None = None
 
     async def execute(
         self,
@@ -184,9 +188,18 @@ class Executor:
         *,
         current_version: str,
         turn: int,
+        inputs: DecisionInputs | None = None,
     ) -> ActionOutcome:
         started = time.perf_counter()
-        outcome = await self._execute(candidate, point, current_version, turn)
+        self._known = (
+            inputs
+            if inputs is not None and point.observation_version == current_version
+            else None
+        )
+        try:
+            outcome = await self._execute(candidate, point, current_version, turn)
+        finally:
+            self._known = None
         outcome.elapsed_ms = round((time.perf_counter() - started) * 1000.0, 1)
         return outcome
 
@@ -247,7 +260,11 @@ class Executor:
 
     # ----------------------------------------------------------- prechecks
     async def _unit_space(self, ref: UnitRef) -> tuple[Any, str]:
-        space = await self.gs.get_unit_action_space(ref.unit_index)
+        known = self._known.action_space if self._known is not None else None
+        if known is not None and known.unit_id == ref.unit_id:
+            space = known
+        else:
+            space = await self.gs.get_unit_action_space(ref.unit_index)
         if space is None:
             return None, "unit_gone"
         if space.unit_id != ref.unit_id:
@@ -263,7 +280,8 @@ class Executor:
         gs = self.gs
         match c.kind:
             case ActionKind.SET_RESEARCH | ActionKind.SET_CIVIC:
-                progress = await gs.get_progress_types()
+                known = self._known.progress if self._known is not None else None
+                progress = known if known is not None else await gs.get_progress_types()
                 if c.kind is ActionKind.SET_RESEARCH:
                     kind, target, current = "tech", p.tech_type, progress.research_type
                 else:
@@ -274,13 +292,24 @@ class Executor:
                 return _ok(method=how) if eligible else _no(f"not_eligible:{how}")
 
             case ActionKind.SET_PRODUCTION:
-                cities, _ = await gs.get_cities()
-                city = next((x for x in cities if x.city_id == p.city_id), None)
+                k = self._known
+                if (
+                    k is not None
+                    and k.city is not None
+                    and k.city.city_id == p.city_id
+                    and k.production_options is not None
+                ):
+                    city, options = k.city, k.production_options
+                else:
+                    cities, _ = await gs.get_cities()
+                    city = next((x for x in cities if x.city_id == p.city_id), None)
+                    options = None
                 if city is None:
                     return _no("city_gone")
                 if city.currently_building not in EMPTY_QUEUE_STATES:
                     return _no(f"queue_not_empty:{city.currently_building}")
-                options = await gs.list_city_production(p.city_id)
+                if options is None:
+                    options = await gs.list_city_production(p.city_id)
                 for o in options:
                     same_target = p.target_x is None or (o.repair_x, o.repair_y) == (
                         p.target_x,

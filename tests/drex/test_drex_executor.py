@@ -397,3 +397,76 @@ def test_policy_confirmation_is_polled_not_read_once():
         game, cand, executor=Executor(game, sleep=_no_sleep, poll_attempts=3)
     )
     assert outcome.status is OutcomeStatus.CONFIRMED
+
+
+# ------------------------------------------------ prechecks reuse inputs (C3)
+def _live_point(game, category, entity):
+    from civ_mcp.drex.live import LiveObserver
+    from civ_mcp.drex.observation import DecisionMemory, DecisionSpec
+    from civ_mcp.drex.points import build_decision_point
+
+    obs = LiveObserver(game)
+    core = asyncio.run(obs.core())
+    spec = DecisionSpec(category, entity)
+    inputs = asyncio.run(obs.inputs(spec, core))
+    point, _ = build_decision_point(
+        spec,
+        core,
+        inputs,
+        DecisionMemory(),
+        objective="o",
+        decision_id="T5#1",
+        max_options=255,
+    )
+    return obs, point, inputs
+
+
+def _count(game, name):
+    return [c[0] for c in game.calls].count(name) + game.query_counts[name]
+
+
+def test_precheck_reuses_provided_action_space_without_a_query():
+    game = FakeGame()
+    obs, point, inputs = _live_point(
+        game, DecisionCategory.UNIT, f"unit:{fx.WARRIOR_ID}"
+    )
+    cand = _cand(point.candidates, ActionKind.MOVE_UNIT)
+    before = game.query_counts["get_unit_action_space"]
+    outcome = asyncio.run(
+        Executor(game, sleep=_no_sleep).execute(
+            cand, point, current_version=obs.version, turn=5, inputs=inputs
+        )
+    )
+    assert outcome.status in (OutcomeStatus.CONFIRMED, OutcomeStatus.PENDING)
+    assert game.query_counts["get_unit_action_space"] == before
+
+
+def test_precheck_queries_when_inputs_are_from_an_older_version():
+    game = FakeGame()
+    obs, point, inputs = _live_point(
+        game, DecisionCategory.UNIT, f"unit:{fx.WARRIOR_ID}"
+    )
+    cand = _cand(point.candidates, ActionKind.MOVE_UNIT)
+    asyncio.run(obs.core())  # the observation moves on
+    outcome = asyncio.run(
+        Executor(game, sleep=_no_sleep).execute(
+            cand, point, current_version=obs.version, turn=5, inputs=inputs
+        )
+    )
+    assert outcome.status is OutcomeStatus.REJECTED
+    assert outcome.reason == "stale_observation"
+
+
+def test_research_precheck_reuses_progress_from_inputs():
+    game = FakeGame()
+    obs, point, inputs = _live_point(game, DecisionCategory.RESEARCH, "empire")
+    assert inputs.progress is not None
+    cand = point.candidates[0]
+    n = game.query_counts["get_progress_types"]
+    asyncio.run(
+        Executor(game, sleep=_no_sleep).execute(
+            cand, point, current_version=obs.version, turn=5, inputs=inputs
+        )
+    )
+    # one read for the postcondition, none for the precheck
+    assert game.query_counts["get_progress_types"] == n + 1

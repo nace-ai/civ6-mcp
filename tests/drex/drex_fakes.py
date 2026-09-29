@@ -150,6 +150,7 @@ class FakeGame:
         return [copy.deepcopy(u) for u in self.units.values()]
 
     async def get_unit_action_space(self, unit_index):
+        self.query_counts["get_unit_action_space"] += 1
         return copy.deepcopy(self.spaces.get(unit_index))
 
     async def get_unit_state(self, unit_index):
