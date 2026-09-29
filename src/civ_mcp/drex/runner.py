@@ -26,6 +26,7 @@ from civ_mcp.drex.points import build_decision_point
 from civ_mcp.drex.refresh import refresh_parts
 from civ_mcp.drex.scheduler import (
     SCHEDULER_ORDER,
+    SUPPORTED_BLOCKERS,
     EndTurn,
     Scheduler,
     TurnLedger,
@@ -259,17 +260,20 @@ class Runner:
         return await self.observer.inputs(step, core)
 
     def _record_religion_step(
-        self, ledger: TurnLedger, step: DecisionSpec, candidate: Any
+        self, ledger: TurnLedger, step: DecisionSpec, candidate: Any, outcome: Any
     ) -> None:
-        """Keep the stored choices of the three-step religion founding."""
+        """Keep the stored choices of the three-step religion founding; a
+        failed founding drops them so Drex re-picks instead of the run stalling."""
         kind = candidate.kind
-        if kind is ActionKind.CHOOSE_RELIGION:
+        ok = outcome.status in (OutcomeStatus.CONFIRMED, OutcomeStatus.PENDING)
+        if kind is ActionKind.CHOOSE_RELIGION and ok:
             ledger.religion_partial["religion_type"] = candidate.params.religion_type
-        elif kind is ActionKind.CHOOSE_FOLLOWER_BELIEF:
+        elif kind is ActionKind.CHOOSE_FOLLOWER_BELIEF and ok:
             ledger.religion_partial["follower_belief"] = candidate.params.belief_type
         elif kind is ActionKind.FOUND_RELIGION:
             ledger.religion_partial.clear()
-            ledger.resolved.add(key_for(step))
+            if ok:
+                ledger.resolved.add(key_for(step))
 
     async def _wait_unsupported(
         self, core: CoreObservation, blockers: list[str]
@@ -543,6 +547,23 @@ class Runner:
                     ledger.full_observed = True
                     core = await self._observe()
                     continue
+                if not in_flight and not self.cfg.dry_run:
+                    stale = self.scheduler.stale_blockers(core, ledger)
+                    if stale:
+                        ledger.dismissed_blockers.update(stale)
+                        raw = await self.gs.dismiss_blocker_notifications(stale)
+                        self.log.write(
+                            "housekeeping",
+                            {
+                                "turn": core.turn,
+                                "action": "blocker_dismissed",
+                                "blockers": stale,
+                                "raw": raw,
+                            },
+                        )
+                        blocked = None
+                        core = await self._observe()
+                        continue
                 if not in_flight:
                     unsupported = self.scheduler.unsupported_blockers(core)
                     if unsupported:
@@ -577,6 +598,19 @@ class Runner:
                         )
                         ledger.blocked_repeats = 0
                         retry_allowed = True
+                        standing = [b[0] for b in blocked.blockers]
+                        if standing and all(b in SUPPORTED_BLOCKERS for b in standing):
+                            # Supported, yet nothing left to decide: most likely a
+                            # query/parser mismatch. Back off instead of hammering.
+                            self.log.write(
+                                "supported_blocker_stuck",
+                                {
+                                    "turn": core.turn,
+                                    "blockers": standing,
+                                    "wait_s": self.cfg.unsupported_wait_s,
+                                },
+                            )
+                            await self._sleep(self.cfg.unsupported_wait_s)
                     await self._sleep(self.cfg.blocked_repeat_wait_s)
                     # Only sessions and deals while the AI turn is processing.
                     core = await self._observe(
@@ -766,8 +800,7 @@ class Runner:
             self.scheduler.note(
                 ledger, step, candidate.kind, outcome, candidate.candidate_id
             )
-            if outcome.status is OutcomeStatus.CONFIRMED:
-                self._record_religion_step(ledger, step, candidate)
+            self._record_religion_step(ledger, step, candidate, outcome)
             self.memory.record(
                 Fact(
                     core.turn,

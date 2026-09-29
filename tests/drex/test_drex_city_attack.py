@@ -138,3 +138,37 @@ def test_precheck_rejects_a_target_that_left():
         )
     )
     assert outcome.status is OutcomeStatus.REJECTED and game.calls == []
+
+
+# --------------------------------------------------- review fixes (I4)
+def test_hold_fire_then_standing_blocker_is_dismissed_as_housekeeping(tmp_path):
+    from test_drex_runner import PreferSelector, _fake_end_turn, _records
+
+    from civ_mcp.drex.decision_log import DecisionLog
+    from civ_mcp.drex.runner import RunConfig, Runner
+
+    game = FakeGame()
+    game.city_targets = {fx.CAPITAL_ID: fx.city_targets()}
+    game.extra_blockers = [(BLOCKER, "City can attack")]
+    game.sticky_blockers = {BLOCKER}  # the engine keeps flagging after hold fire
+    log = DecisionLog(tmp_path / "run.jsonl", run_id="t", secrets=[])
+    runner = Runner(
+        game,
+        PreferSelector(
+            prefixes=(f"hold_fire:{fx.CAPITAL_ID}", "skip:", "research:", "produce:")
+        ),
+        log,
+        RunConfig(turns=1),
+        end_turn=_fake_end_turn(game),
+    )
+    runner._sleep = _no_sleep
+    runner.max_loop_iterations = 60
+    result = asyncio.run(runner.run())
+    assert result.stop_reason == "turn_budget_reached"
+    assert not any(m == "city_attack" for m, _ in game.calls)
+    hk = [
+        r
+        for r in _records(tmp_path)
+        if r["type"] == "housekeeping" and r["action"] == "blocker_dismissed"
+    ]
+    assert hk and BLOCKER in hk[0]["blockers"]

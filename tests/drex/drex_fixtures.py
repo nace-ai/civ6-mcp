@@ -537,6 +537,7 @@ def religion_founding():
                 opt(
                     "BELIEF_CLASS_FOUNDER", "BELIEF_CHURCH_PROPERTY", "Church Property"
                 ),
+                opt("BELIEF_CLASS_FOUNDER", "BELIEF_STEWARDSHIP", "Stewardship"),
             ],
             "BELIEF_CLASS_ENHANCER": [
                 opt(

@@ -61,8 +61,13 @@ for i, u in Players[me]:GetUnits():Members() do
           if okc and c then canAny = true break end
         end
       end
-      local tag = (xp >= needed and canAny) and "PROMOTABLE|" or "SKIP|"
-      local tail = (xp >= needed) and "" or "|below_threshold"
+      local stored = 0
+      pcall(function() stored = exp:GetStoredPromotions() end)
+      -- the engine's stored-promotion counter is what raises the blocker;
+      -- a unit with one pending is promotable whatever the XP formula says
+      local due = (xp >= needed) or (stored > 0)
+      local tag = (due and canAny) and "PROMOTABLE|" or "SKIP|"
+      local tail = due and "" or "|below_threshold"
       print(tag .. u:GetID() .. "|" .. (u:GetID() % 65536) .. "|" .. (ui.UnitType or "UNKNOWN") .. "|" .. xp .. "|" .. needed .. "|" .. n .. tail)
     end
   end
@@ -175,3 +180,40 @@ def parse_end_turn_blocking_types(lines: list[str]) -> dict[str, int]:
             except ValueError:
                 continue
     return out
+
+
+def build_dismiss_blocker_notifications(blocking_types: list[str]) -> str:
+    """InGame housekeeping: dismiss the notifications behind the named
+    end-turn blocker types (used when a supported blocker stands but the
+    engine offers nothing left to decide, e.g. a stale promotion flag)."""
+    names = ", ".join(f'["{t}"] = true' for t in blocking_types)
+    return f"""
+local me = Game.GetLocalPlayer()
+local wanted = {{ {names} }}
+local n = 0
+local list = NotificationManager.GetList(me)
+if list then
+  for _, nid in ipairs(list) do
+    local e = NotificationManager.Find(me, nid)
+    if e and not e:IsDismissed() then
+      local bt = e:GetEndTurnBlocking()
+      local hit = false
+      if bt and bt ~= 0 then
+        for k, v in pairs(EndTurnBlockingTypes) do
+          if v == bt and wanted[k] then hit = true break end
+        end
+      end
+      if not hit and wanted["ENDTURN_BLOCKING_UNIT_PROMOTION"] then
+        local ok, t = pcall(function() return e:GetType() end)
+        if ok and t == NotificationTypes.NOTIFICATION_UNIT_PROMOTION_AVAILABLE then hit = true end
+      end
+      if hit then
+        pcall(function() NotificationManager.Dismiss(me, nid) end)
+        n = n + 1
+      end
+    end
+  end
+end
+print("OK:DISMISSED|" .. n)
+print("{SENTINEL}")
+"""

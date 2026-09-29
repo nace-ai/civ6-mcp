@@ -644,3 +644,24 @@ def test_blocked_repeat_while_in_flight_observes_reactively_only(tmp_path):
     assert "get_sessions" in after  # reactive reads still happen
     assert "get_units" not in after, game.trace
     assert "dismiss" not in after, game.trace
+
+
+def test_supported_blocker_with_nothing_to_decide_waits_instead_of_hammering(tmp_path):
+    """A parser mismatch leaves a supported blocker standing with no candidates:
+    the loop must log it and back off, not spin end turns every second."""
+    game = FakeGame()
+    game.extra_blockers = [("ENDTURN_BLOCKING_GIVE_INFLUENCE_TOKEN", "envoys")]
+    game.envoy_status.tokens_available = 0  # supported blocker, no candidates
+    game.sticky_blockers = {"ENDTURN_BLOCKING_GIVE_INFLUENCE_TOKEN"}
+    slept = []
+
+    async def sleep(s):
+        slept.append(s)
+
+    runner, _ = _runner(game, tmp_path)
+    runner._sleep = sleep
+    runner.max_loop_iterations = 40
+    asyncio.run(runner.run())
+    recs = [r for r in _records(tmp_path) if r["type"] == "supported_blocker_stuck"]
+    assert recs and "ENDTURN_BLOCKING_GIVE_INFLUENCE_TOKEN" in recs[0]["blockers"]
+    assert max(slept) >= 30.0

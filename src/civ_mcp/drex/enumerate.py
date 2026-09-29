@@ -596,8 +596,17 @@ def religion_candidates(
 def belief_candidates(status: lq.ReligionFoundingStatus) -> list[Candidate]:
     """Add a belief to an existing religion: every available belief of every
     class the engine still offers."""
+    # A founded religion already holds its founder and follower beliefs; the
+    # engine only lets it add the enhancer and worship classes.
+    addable = (
+        {"BELIEF_CLASS_ENHANCER", "BELIEF_CLASS_WORSHIP"}
+        if status.has_religion
+        else set(status.beliefs_by_class)
+    )
     out: list[Candidate] = []
     for cls in sorted(status.beliefs_by_class):
+        if cls not in addable:
+            continue
         for b in status.beliefs_by_class[cls]:
             out.append(
                 Candidate.create(

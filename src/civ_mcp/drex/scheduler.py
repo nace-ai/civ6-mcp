@@ -136,6 +136,7 @@ class TurnLedger:
     # the same turn (dropped with the ledger on a new turn).
     religion_partial: dict[str, str] = field(default_factory=dict)
     great_people_offered: bool = False
+    dismissed_blockers: set[str] = field(default_factory=set)
 
 
 def key_for(spec: DecisionSpec) -> str:
@@ -214,7 +215,9 @@ class Scheduler:
             case DecisionCategory.GOVERNOR:
                 return self.max_governor_decisions
             case DecisionCategory.RELIGION:
-                return 3  # religion, follower belief, founder belief + found
+                return 6  # two stored steps + found, with room to re-pick once
+            case DecisionCategory.DEDICATION:
+                return 3  # Heroic Ages allow up to three dedications
         return None
 
     def _open(self, ledger: TurnLedger, spec: DecisionSpec) -> bool:
@@ -254,6 +257,25 @@ class Scheduler:
         """True once the failure budget for this session is spent: the next
         decision also offers Drex "close the screen"."""
         return key_for(spec) in ledger.exit_offered
+
+    def stale_blockers(self, core: CoreObservation, ledger: TurnLedger) -> list[str]:
+        """Supported blockers that stand although nothing is left to decide:
+        a promotion flag with no promotable unit, or a city attack prompt once
+        every city has attacked or held fire. These are engine leftovers the
+        runner dismisses as housekeeping (once per turn)."""
+        blockers = core.blocker_types()
+        stale: list[str] = []
+        if PROMOTION_BLOCKER in blockers and not core.promotable:
+            stale.append(PROMOTION_BLOCKER)
+        attack = blockers & CITY_ATTACK_BLOCKERS
+        if attack and all(
+            not self._open(
+                ledger, DecisionSpec(DecisionCategory.CITY_ATTACK, f"city:{c.city_id}")
+            )
+            for c in core.cities
+        ):
+            stale.extend(sorted(attack))
+        return [b for b in stale if b not in ledger.dismissed_blockers]
 
     def unsupported_blockers(self, core: CoreObservation) -> list[str]:
         return sorted(
@@ -416,6 +438,7 @@ class Scheduler:
             DecisionCategory.ENVOY,
             DecisionCategory.GOVERNOR,
             DecisionCategory.RELIGION,  # resolved by the runner after FOUND_RELIGION
+            DecisionCategory.DEDICATION,  # repeats while the blocker stands
         ):
             ledger.resolved.add(key)
 

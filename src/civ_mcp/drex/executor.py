@@ -288,21 +288,22 @@ class Executor:
             return ActionOutcome(
                 OutcomeStatus.REJECTED, f"precheck_error:{type(e).__name__}", False
             )
-        # Repeatable decisions (another envoy, a reply in a new dialogue round)
-        # are distinct actions only when the observed state differs.
-        key = (turn, candidate.candidate_id, pre.state.get("dedup"))
-        if key in self._dispatched:
-            return ActionOutcome(
-                OutcomeStatus.REJECTED, "already_dispatched_this_turn", False
-            )
         if not pre.ok:
             return ActionOutcome(
                 OutcomeStatus.REJECTED, f"precheck:{pre.reason}", False
             )
 
         call = dispatch_call(candidate)
+        # Repeatable decisions (another envoy, a reply in a new dialogue round)
+        # are distinct actions only when the observed state differs.
+        key = (turn, candidate.candidate_id, pre.state.get("dedup"))
+        if call is not NO_DISPATCH and key in self._dispatched:
+            return ActionOutcome(
+                OutcomeStatus.REJECTED, "already_dispatched_this_turn", False
+            )
         if call is NO_DISPATCH:
-            self._dispatched.add(key)
+            # Nothing reaches the game, so re-choosing the same stored step
+            # later in the turn (e.g. after a failed founding) is fine.
             return ActionOutcome(OutcomeStatus.CONFIRMED, "no_action", False)
         if (
             candidate.kind is ActionKind.MOVE_UNIT
@@ -890,8 +891,7 @@ class Executor:
                 )
 
             case ActionKind.FOUND_RELIGION:
-                if raw.startswith(("RELIGION_FOUNDED|", "OK:RELIGION_FOUNDED|")):
-                    return confirmed("religion_founded_from_dispatch")
+                # the dispatch prints its OK line unconditionally: readback only
                 if _game_error(raw):
                     return self._unconfirmed(raw, "founding_refused")
 
@@ -903,8 +903,7 @@ class Executor:
                 return self._unconfirmed(raw, "religion_not_observed")
 
             case ActionKind.ADD_BELIEF:
-                if raw.startswith(("BELIEF_ADDED|", "OK:BELIEF_ADDED|")):
-                    return confirmed("belief_added_from_dispatch")
+                # the dispatch prints its OK line unconditionally: readback only
                 if _game_error(raw):
                     return self._unconfirmed(raw, "belief_refused")
 
@@ -940,8 +939,7 @@ class Executor:
                 return self._unconfirmed(raw, "great_person_not_observed")
 
             case ActionKind.CHOOSE_DEDICATION:
-                if raw.startswith(("DEDICATION_CHOSEN|", "OK:DEDICATION_CHOSEN|")):
-                    return confirmed("dedication_confirmed_from_dispatch")
+                # the dispatch prints its OK line unconditionally: readback only
                 if _game_error(raw):
                     return self._unconfirmed(raw, "dedication_refused")
 

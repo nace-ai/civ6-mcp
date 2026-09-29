@@ -166,6 +166,13 @@ class GameState:
         lines = await self.conn.execute_read(lq_drex.build_promotable_units_query())
         return lq_drex.parse_promotable_units(lines)
 
+    async def dismiss_blocker_notifications(self, blocking_types: list[str]) -> str:
+        """InGame housekeeping: dismiss the notifications behind stale blockers."""
+        lines = await self.conn.execute_write(
+            lq_drex.build_dismiss_blocker_notifications(list(blocking_types))
+        )
+        return _action_result(lines)
+
     async def get_end_turn_blocking_types(self) -> dict[str, int]:
         """InGame: the engine's EndTurnBlockingTypes enum, for coverage checks."""
         lines = await self.conn.execute_write(

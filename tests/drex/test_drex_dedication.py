@@ -98,3 +98,57 @@ def test_precheck_rejects_a_dedication_already_active():
         )
     )
     assert outcome.status is OutcomeStatus.REJECTED and game.calls == []
+
+
+# --------------------------------------------------- review fixes (I3)
+def test_dedication_is_offered_again_while_more_selections_are_allowed():
+    from civ_mcp.drex.executor import ActionOutcome
+
+    game = FakeGame()
+    game.dedication_status.selections_allowed = 2
+    game.extra_blockers = [(DEDICATION_BLOCKER, "Choose dedications")]
+    core = asyncio.run(LiveObserver(game).core())
+    s = Scheduler()
+    ledger = TurnLedger(turn=5)
+    first = s.next(core, ledger)
+    assert first.category is DecisionCategory.DEDICATION
+    s.note(
+        ledger,
+        first,
+        ActionKind.CHOOSE_DEDICATION,
+        ActionOutcome(OutcomeStatus.CONFIRMED, "x", True),
+    )
+    second = s.next(core, ledger)  # blocker still stands in this observation
+    assert second.category is DecisionCategory.DEDICATION
+    for _ in range(4):
+        s.note(
+            ledger,
+            second,
+            ActionKind.CHOOSE_DEDICATION,
+            ActionOutcome(OutcomeStatus.CONFIRMED, "x", True),
+        )
+    assert (
+        getattr(s.next(core, ledger), "category", None)
+        is not DecisionCategory.DEDICATION
+    )
+
+
+def test_choose_dedication_verifies_by_readback_not_by_print():
+    game = FakeGame()
+    game.extra_blockers = [(DEDICATION_BLOCKER, "x")]
+    obs = LiveObserver(game)
+    core = asyncio.run(obs.core())
+    point, inputs = _point(obs, core)
+    cand = point.candidates[0]
+
+    async def silent(index):
+        await game._record_only("choose_dedication", index)
+        return "DEDICATION_CHOSEN|x"
+
+    game.choose_dedication = silent
+    outcome = asyncio.run(
+        Executor(game, sleep=_no_sleep).execute(
+            cand, point, current_version=obs.version, turn=5, inputs=inputs
+        )
+    )
+    assert outcome.status is not OutcomeStatus.CONFIRMED

@@ -81,6 +81,8 @@ class FakeGame:
         self.great_people: list = []
         self.religion_status = fx.religion_founding()
         self.city_targets: dict[int, list] = {}
+        # blockers the fake keeps raising even after the matching action
+        self.sticky_blockers: set[str] = set()
         self.fail: dict[str, tuple[Exception, bool]] = {}
         self.ignore: set[str] = set()
         self.end_turn_calls = 0
@@ -97,6 +99,19 @@ class FakeGame:
         if fail and not fail[1]:
             raise fail[0]
         return fail
+
+    async def _record_only(self, method, *args):
+        """Test helper: record a call without the fake's side effects."""
+        self.calls.append((method, args))
+        self.conn.roundtrips += 1
+
+    async def dismiss_blocker_notifications(self, blocking_types):
+        self._record("dismiss_blocker_notifications", tuple(blocking_types))
+        self.extra_blockers = [
+            b for b in self.extra_blockers if b[0] not in blocking_types
+        ]
+        self.sticky_blockers -= set(blocking_types)
+        return f"DISMISSED|{len(blocking_types)}"
 
     def _maybe_fail(self, method):
         fail = self.fail.pop(method, None)
@@ -258,6 +273,9 @@ class FakeGame:
         self.query_counts["get_end_turn_blockers"] += 1
         self.conn.roundtrips += 1
         blockers = list(self.extra_blockers)
+        for name in self.sticky_blockers:
+            if name not in {b[0] for b in blockers}:
+                blockers.append((name, "sticky"))
         if self.research is None:
             blockers.append(("ENDTURN_BLOCKING_RESEARCH", "Choose research"))
         if self.civic is None:

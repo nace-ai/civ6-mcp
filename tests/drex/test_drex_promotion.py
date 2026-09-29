@@ -121,3 +121,39 @@ def test_promotion_refresh_keeps_units_up_to_date_after_promoting():
     asyncio.run(game.promote_unit(fx.WARRIOR_ID, "PROMOTION_BATTLECRY"))
     fresh = asyncio.run(obs.refresh(core, frozenset({"units", "blockers", "popup"})))
     assert fresh.promotable == [] and PROMOTION_BLOCKER not in fresh.blocker_types()
+
+
+# --------------------------------------------------- review fixes (C1)
+def test_promotable_query_counts_stored_promotions():
+    from civ_mcp.lua.drex_queries import build_promotable_units_query
+
+    lua = build_promotable_units_query()
+    assert "GetStoredPromotions" in lua
+
+
+def test_promotion_blocker_without_promotable_units_is_cleared_as_housekeeping(
+    tmp_path,
+):
+    from test_drex_runner import PreferSelector, _fake_end_turn, _records
+
+    from civ_mcp.drex.decision_log import DecisionLog
+    from civ_mcp.drex.runner import RunConfig, Runner
+
+    game = FakeGame()
+    game.promotable = []  # the engine flags a stale promotion nobody can take
+    game.extra_blockers = [(PROMOTION_BLOCKER, "Unit can be promoted")]
+    log = DecisionLog(tmp_path / "run.jsonl", run_id="t", secrets=[])
+    runner = Runner(
+        game, PreferSelector(), log, RunConfig(turns=1), end_turn=_fake_end_turn(game)
+    )
+    runner._sleep = _no_sleep
+    runner.max_loop_iterations = 60
+    result = asyncio.run(runner.run())
+    assert result.stop_reason == "turn_budget_reached"
+    assert any(c[0] == "dismiss_blocker_notifications" for c in game.calls)
+    hk = [
+        r
+        for r in _records(tmp_path)
+        if r["type"] == "housekeeping" and r["action"] == "blocker_dismissed"
+    ]
+    assert hk and PROMOTION_BLOCKER in hk[0]["blockers"]
