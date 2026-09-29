@@ -151,3 +151,14 @@ def test_fullscreen_warning_only_for_exclusive_fullscreen(tmp_path):
     f.write_text("FullScreen 2\n")
     assert _fullscreen_warning(f) is None
     assert _fullscreen_warning(tmp_path / "missing.txt") is None
+
+
+def test_keyboard_interrupt_exits_130(monkeypatch):
+    from civ_mcp.drex import cli
+
+    def boom(coro):
+        coro.close()
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli.asyncio, "run", boom)
+    assert cli.main(["play"]) == 130

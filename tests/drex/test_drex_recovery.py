@@ -131,3 +131,107 @@ def test_dispatch_error_is_reconciled_not_replayed(tmp_path):
     )
     assert dec["outcome"]["reconciled"] is True
     assert not any(r["type"] == "game_io_error" for r in _records(tmp_path))
+
+
+# ------------------------------------------------------------ review fixes
+def test_persistent_lua_error_never_relaunches_a_responsive_game(tmp_path):
+    game = FakeGame()
+    orig = game.get_units
+    state = {"n": 0}
+
+    async def flaky():
+        state["n"] += 1
+        if state["n"] <= 6:
+            raise LuaError("ERR: attempt to index nil (mod API)")
+        return await orig()
+
+    game.get_units = flaky
+    relaunched = []
+
+    async def relaunch():
+        relaunched.append(True)
+        return "relaunched"
+
+    clock = _Clock()
+    runner, slept = _runner(game, tmp_path, clock, relaunch=relaunch)
+    runner.cfg.game_dead_after_s = 2.0
+    result = asyncio.run(runner.run())
+    assert result.stop_reason == "turn_budget_reached"
+    assert relaunched == []
+
+
+def test_relaunch_raising_is_logged_and_the_run_continues(tmp_path):
+    game = FakeGame()
+    state = {"dead": True}
+    orig = game.get_units
+
+    async def flaky():
+        if state["dead"]:
+            raise ConnectionError("socket closed")
+        return await orig()
+
+    game.get_units = flaky
+
+    async def reconnect():
+        if state["dead"]:
+            raise ConnectionError("refused")
+
+    game.conn.reconnect = reconnect
+    attempts = {"n": 0}
+
+    async def relaunch():
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise RuntimeError("OCR dependencies missing")
+        state["dead"] = False
+        return "relaunched"
+
+    clock = _Clock()
+    runner, _ = _runner(game, tmp_path, clock, relaunch=relaunch)
+    runner.cfg.game_dead_after_s = 10.0
+    result = asyncio.run(runner.run())
+    assert result.stop_reason == "turn_budget_reached"
+    recs = [r for r in _records(tmp_path) if r["type"] == "game_relaunch"]
+    assert any("RuntimeError" in (r.get("error") or "") for r in recs)
+
+
+def test_repeated_runner_error_checkpoints_once_and_backs_off(tmp_path):
+    game = FakeGame()
+    orig = game.get_cities
+    calls = {"n": 0}
+
+    async def flaky():
+        calls["n"] += 1
+        if 2 <= calls["n"] <= 4:
+            raise RuntimeError("weird")
+        return await orig()
+
+    game.get_cities = flaky
+    clock = _Clock()
+    checkpoints = []
+
+    async def checkpoint(gs, turn):
+        checkpoints.append(turn)
+        return "cp"
+
+    runner, slept = _runner(game, tmp_path, clock, checkpoint=checkpoint)
+    result = asyncio.run(runner.run())
+    assert result.stop_reason == "turn_budget_reached"
+    assert checkpoints == [5]
+    errors = [r for r in _records(tmp_path) if r["type"] == "runner_error"]
+    assert len(errors) == 3
+    assert slept[:3] == [1.0, 2.0, 4.0]
+
+
+def test_errored_identity_section_is_an_incomplete_snapshot(tmp_path):
+    from civ_mcp.drex.live import LiveObserver
+    from civ_mcp.game_state import CoreSnapshot
+
+    class Game:
+        async def get_core_snapshot(self, parts=None):
+            return CoreSnapshot(civ="unknown", seed=0, errors={"identity": "boom"})
+
+    import pytest
+
+    with pytest.raises(ConnectionError):
+        asyncio.run(LiveObserver(Game()).core())

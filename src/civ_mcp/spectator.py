@@ -233,7 +233,12 @@ class PopupWatcher:
                 "PopupWatcher: dismissing popup after %.1fs", now - self._first_seen
             )
             self._first_seen = None
-            await dismiss_popup(self._conn)
+            try:
+                await dismiss_popup(self._conn)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 — cosmetic; never surfaces to the run
+                log.debug("PopupWatcher: dismiss failed", exc_info=True)
 
     async def stop(self) -> None:
         if self._task:

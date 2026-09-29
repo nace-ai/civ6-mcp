@@ -536,3 +536,60 @@ def test_move_keeps_predismiss_when_a_popup_is_visible():
     ex = Executor(game, sleep=_no_sleep, popup_state_provider=lambda: "POPUP")
     _execute(game, obs, point, inputs, cand, executor=ex)
     assert game.move_predismiss == [True]
+
+
+# ------------------------------------------ review fix: production verify order
+def test_production_confirmed_from_dispatch_without_readback_poll():
+    game = FakeGame()
+    obs, point, inputs = _live_point(
+        game, DecisionCategory.PRODUCTION, f"city:{fx.CAPITAL_ID}"
+    )
+    calls = {"n": 0}
+    orig = game.verify_production
+
+    async def counting(city_id, item_name):
+        calls["n"] += 1
+        return await orig(city_id, item_name)
+
+    game.verify_production = counting
+    outcome = _execute(game, obs, point, inputs, point.candidates[0])
+    assert outcome.status is OutcomeStatus.CONFIRMED
+    assert outcome.reason == "production_confirmed_from_dispatch"
+    assert calls["n"] == 0
+
+
+def test_production_not_confirmed_when_dispatch_is_inconclusive_and_readback_says_no():
+    game = FakeGame()
+    obs, point, inputs = _live_point(
+        game, DecisionCategory.PRODUCTION, f"city:{fx.CAPITAL_ID}"
+    )
+    orig = game.set_city_production
+
+    async def maybe(*a, **kw):
+        await orig(*a, **kw)
+        game.cities[fx.CAPITAL_ID].currently_building = "nothing"
+        return "MAYBE:PRODUCING|BUILDING_MONUMENT|canStart=false"
+
+    game.set_city_production = maybe
+    outcome = _execute(game, obs, point, inputs, point.candidates[0])
+    assert outcome.status is not OutcomeStatus.CONFIRMED
+    assert outcome.reason == "production_not_observed"
+
+
+def test_production_readback_error_after_inconclusive_dispatch_is_not_confirmed():
+    from civ_mcp.connection import LuaError
+
+    game = FakeGame()
+    obs, point, inputs = _live_point(
+        game, DecisionCategory.PRODUCTION, f"city:{fx.CAPITAL_ID}"
+    )
+    orig = game.set_city_production
+
+    async def maybe(*a, **kw):
+        await orig(*a, **kw)
+        return "MAYBE:PRODUCING|BUILDING_MONUMENT|pillaged"
+
+    game.set_city_production = maybe
+    game.fail["verify_production"] = (LuaError("ERR: nil"), False)
+    outcome = _execute(game, obs, point, inputs, point.candidates[0])
+    assert outcome.status is OutcomeStatus.UNKNOWN

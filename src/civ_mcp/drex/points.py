@@ -137,7 +137,12 @@ def build_decision_point(
             excluded.append(Exclusion(c.candidate_id, "failed earlier this turn"))
         else:
             untried.append(c)
-    if legal >= 2 and len(untried) < 2:
+    exit_only = (
+        allow_exit
+        and len(untried) == 1
+        and getattr(untried[0].params, "response", None) == "EXIT"
+    )
+    if legal >= 2 and len(untried) < 2 and not exit_only:
         excluded.extend(
             Exclusion(c.candidate_id, "no untried alternative after earlier failures")
             for c in untried
@@ -157,6 +162,10 @@ def build_decision_point(
     forced_rule = None
     if len(kept) == 1 and len(untried) > 1:
         forced_rule = "forced_turn_ending_order"
+    elif exit_only:
+        # Every response failed; closing the screen is the housekeeping act
+        # the controller already performs for informational sessions.
+        forced_rule = "forced_close_screen"
     kept, cut = shortlist(kept, max_options)
     excluded.extend(cut)
     if not kept:

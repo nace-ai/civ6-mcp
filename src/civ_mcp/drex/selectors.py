@@ -169,7 +169,20 @@ class DrexSelector:
                 )
             await self._sleep(wait)
             if not retryable and self._refresh_client is not None:
-                self._client = await self._refresh_client()
+                try:
+                    self._client = await self._refresh_client()
+                except Exception as e:  # noqa: BLE001 — e.g. a half-edited env file
+                    if self._on_wait is not None:
+                        self._on_wait(
+                            {
+                                "attempt": n,
+                                "error": f"client refresh failed: {e}",
+                                "error_class": type(e).__name__,
+                                "sleep_s": 0.0,
+                                "retryable": False,
+                                "warn": True,
+                            }
+                        )
 
 
 class RandomSelector:

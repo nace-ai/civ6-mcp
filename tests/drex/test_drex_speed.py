@@ -232,3 +232,33 @@ def test_decision_round_trip_budget(tmp_path):
         > 3
     ]
     assert not over, over
+
+
+def test_timeout_marks_stream_dirty_and_next_command_drains_long(monkeypatch):
+    from civ_mcp import connection as conn_mod
+
+    waits = []
+
+    async def drain_messages(reader, timeout=0.5):
+        waits.append(timeout)
+        return []
+
+    # first command: output without a sentinel (times out); second: normal
+    _fake_wire(monkeypatch, ["A"])
+    monkeypatch.setattr(conn_mod.tuner_client, "drain_messages", drain_messages)
+    c = _connected()
+    c._writer.queue = []
+
+    async def send_message(writer, tag, text):
+        if "first" in text:
+            writer.queue = [_Msg("O\x00InGame: partial")]  # no sentinel
+        else:
+            writer.queue = [_Msg("O\x00InGame: ok"), _Msg("O\x00InGame: ---END---")]
+
+    monkeypatch.setattr(conn_mod.tuner_client, "send_message", send_message)
+    lines = asyncio.run(c.execute_write("print('first')", timeout=0.05))
+    assert lines == ["partial"] and c.dirty is True
+    waits.clear()
+    lines = asyncio.run(c.execute_write("print('second')"))
+    assert lines == ["ok"] and c.dirty is False
+    assert waits[0] == GameConnection.DIRTY_DRAIN_S and waits[0] >= 0.2

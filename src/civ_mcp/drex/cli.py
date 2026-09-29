@@ -438,16 +438,20 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    if args.command == "verify-api":
-        return asyncio.run(_verify_api(args))
-    if args.command == "play":
-        return asyncio.run(_run_live(args, dry_run=False))
-    if args.command == "dry-run":
-        return asyncio.run(_run_live(args, dry_run=True))
-    if args.command == "replay":
-        return _replay(args)
-    if args.command == "probe":
-        return asyncio.run(_probe(args))
+    try:
+        if args.command == "verify-api":
+            return asyncio.run(_verify_api(args))
+        if args.command == "play":
+            return asyncio.run(_run_live(args, dry_run=False))
+        if args.command == "dry-run":
+            return asyncio.run(_run_live(args, dry_run=True))
+        if args.command == "replay":
+            return _replay(args)
+        if args.command == "probe":
+            return asyncio.run(_probe(args))
+    except KeyboardInterrupt:
+        _err("interrupted")
+        return 130
     return 2
 
 

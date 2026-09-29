@@ -533,15 +533,19 @@ class Executor:
                 return self._unconfirmed(raw, "selection_not_observed")
 
             case ActionKind.SET_PRODUCTION:
+                # The dispatch Lua prints PRODUCING|<item>|... only after the
+                # engine accepted the operation (canStart); MAYBE:/ERR: lines
+                # are inconclusive and need the readback.
+                first = raw.splitlines()[0] if raw else ""
+                if first.startswith(f"PRODUCING|{p.item_name}|"):
+                    return confirmed("production_confirmed_from_dispatch")
                 try:
                     if await self._poll(
                         lambda: gs.verify_production(p.city_id, p.item_name)
                     ):
                         return confirmed("production_readback_confirmed")
-                except LuaError:
-                    pass  # readback unavailable; fall back to the dispatch output
-                if raw.startswith("PRODUCING|") and f"|{p.item_name}|" in raw + "|":
-                    return confirmed("production_confirmed_from_dispatch")
+                except LuaError as e:
+                    return self._unconfirmed(raw, f"production_readback_error:{e}")
                 return self._unconfirmed(raw, "production_not_observed")
 
             case ActionKind.MOVE_UNIT:

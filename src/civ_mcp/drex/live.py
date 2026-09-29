@@ -73,6 +73,8 @@ class LiveObserver:
             )
             if getattr(snap, p) is None
         ]
+        if "identity" in snap.errors or snap.civ == "unknown":
+            missing.insert(0, "identity")
         if missing:
             raise ConnectionError(
                 f"core snapshot incomplete: {missing}; errors={snap.errors}"

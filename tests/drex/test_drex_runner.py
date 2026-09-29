@@ -598,3 +598,49 @@ def test_only_terminal_stop_reasons_are_reachable():
         "interrupted",
     }, reasons
     assert "class Stop" not in src
+
+
+def test_blocked_repeat_while_in_flight_observes_reactively_only(tmp_path):
+    class TracingGame(FakeGame):
+        def __init__(self):
+            super().__init__()
+            self.trace = []
+
+        async def get_units(self):
+            self.trace.append("get_units")
+            return await super().get_units()
+
+        async def get_diplomacy_sessions(self):
+            self.trace.append("get_sessions")
+            return await super().get_diplomacy_sessions()
+
+        async def dismiss_popup(self):
+            self.trace.append("dismiss")
+            return await super().dismiss_popup()
+
+    game = TracingGame()
+    # an at-war (informational) session that will not close: stuck, in flight
+    game.sessions = [fx.session(is_at_war=True)]
+    game.ignore.add("diplomacy_respond")
+    calls = {"n": 0}
+
+    async def end_turn(gs):
+        calls["n"] += 1
+        game.trace.append("end_turn")
+        return EndTurnOutcome(
+            status="blocked",
+            turn_before=5,
+            turn_after=5,
+            diplomacy_pending=[1],
+            end_turn_in_flight=True,
+        )
+
+    log = DecisionLog(tmp_path / "run.jsonl", run_id="drex-test", secrets=[])
+    runner = Runner(game, PreferSelector(), log, RunConfig(turns=1), end_turn=end_turn)
+    runner._sleep = _no_sleep_async
+    runner.max_loop_iterations = 30
+    asyncio.run(runner.run())
+    after = game.trace[game.trace.index("end_turn") + 1 :]
+    assert "get_sessions" in after  # reactive reads still happen
+    assert "get_units" not in after, game.trace
+    assert "dismiss" not in after, game.trace

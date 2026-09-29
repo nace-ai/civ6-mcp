@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import dataclasses
 import time
 import traceback
@@ -103,6 +102,12 @@ def _describe_block(outcome: EndTurnOutcome) -> str:
     return ",".join(what) or outcome.status
 
 
+def _swallow_task_result(task: asyncio.Task) -> None:
+    """Retrieve a cancelled prefetch's result so asyncio does not warn."""
+    if not task.cancelled():
+        task.exception()
+
+
 class Runner:
     def __init__(
         self,
@@ -196,7 +201,8 @@ class Runner:
         self._phase = "schedule"
         self._turn_stats["roundtrips"] += self._last_observe["roundtrips"]
         self._last_core = core
-        if self.spectator is not None:
+        if self.spectator is not None and reactive_from is None:
+            # reactive reads do not refresh the popup state
             self.spectator.popup_status(core.popup_state)
         return core
 
@@ -220,6 +226,7 @@ class Runner:
             self._prefetch = None
             if not task.done():
                 task.cancel()
+                task.add_done_callback(_swallow_task_result)
 
     async def _take_inputs(
         self, step: DecisionSpec, core: CoreObservation
@@ -232,8 +239,7 @@ class Runner:
             task, spec, before = pf
             if not task.done():
                 task.cancel()
-                with contextlib.suppress(asyncio.CancelledError, Exception):
-                    await task
+                task.add_done_callback(_swallow_task_result)
             elif spec == step and not task.cancelled() and task.exception() is None:
                 unit_id = int(step.entity.split(":", 1)[1])
                 was, now = before.unit(unit_id), core.unit(unit_id)
@@ -287,6 +293,8 @@ class Runner:
         outage_started: float | None = None
         relaunched = False
         attempt = 0
+        error_streak = 0
+        checkpointed: set[tuple[int | None, str]] = set()
         try:
             while True:
                 try:
@@ -305,34 +313,58 @@ class Runner:
                         outage_started = now
                     self._log_io_error(e, self._phase, attempt)
                     wait = min(
-                        self.cfg.reconnect_backoff_s * (2 ** (attempt - 1)),
+                        self.cfg.reconnect_backoff_s * (2 ** min(attempt - 1, 16)),
                         self.cfg.reconnect_max_backoff_s,
                     )
                     await self._sleep(wait)
                     if (
                         not relaunched
                         and self._relaunch is not None
+                        and isinstance(e, (ConnectionError, OSError, TimeoutError))
                         and self._clock() - outage_started >= self.cfg.game_dead_after_s
                     ):
+                        # Only a dead connection justifies killing the game; a
+                        # Lua error is the tuner answering.
                         relaunched = True
-                        result = await self._relaunch()
-                        self.log.write("game_relaunch", {"result": result})
+                        try:
+                            result = await self._relaunch()
+                            self.log.write("game_relaunch", {"result": result})
+                        except Exception as le:  # noqa: BLE001
+                            self.log.write(
+                                "game_relaunch",
+                                {"error": f"{type(le).__name__}: {le}"},
+                            )
+                            # allow another attempt after a full dead window
+                            relaunched = False
+                            outage_started = self._clock()
                     try:
                         await self.gs.conn.reconnect()
                     except _IO_ERRORS as re_err:
                         self._log_io_error(re_err, "reconnect", attempt)
                         continue
                 except Exception as e:  # noqa: BLE001 — logged with traceback; the run resumes
+                    if self._io_ok:
+                        error_streak = 0
+                        self._io_ok = False
+                    error_streak += 1
+                    turn = self._last_core.turn if self._last_core else None
                     self.log.write(
                         "runner_error",
                         {
                             "error": f"{type(e).__name__}: {e}",
                             "traceback": traceback.format_exc()[-4000:],
                             "phase": self._phase,
-                            "turn": self._last_core.turn if self._last_core else None,
+                            "turn": turn,
+                            "streak": error_streak,
                         },
                     )
-                    if self._last_core is not None and not self.cfg.dry_run:
+                    key = (turn, type(e).__name__)
+                    if (
+                        self._last_core is not None
+                        and not self.cfg.dry_run
+                        and key not in checkpointed
+                    ):
+                        checkpointed.add(key)
                         try:
                             await self._checkpoint(self.gs, self._last_core.turn)
                         except Exception as ce:  # noqa: BLE001
@@ -340,7 +372,13 @@ class Runner:
                                 "checkpoint_failed",
                                 {"error": f"{type(ce).__name__}: {ce}"},
                             )
-                    await self._sleep(self.cfg.reconnect_backoff_s)
+                    await self._sleep(
+                        min(
+                            self.cfg.reconnect_backoff_s
+                            * (2 ** min(error_streak - 1, 16)),
+                            self.cfg.reconnect_max_backoff_s,
+                        )
+                    )
         finally:
             self._drop_prefetch()
             if self.spectator is not None:
@@ -504,7 +542,8 @@ class Runner:
                     # popups and allow one more request. Never stop.
                     ledger.blocked_repeats += 1
                     if (
-                        ledger.blocked_repeats
+                        not in_flight
+                        and ledger.blocked_repeats
                         >= self.cfg.blocked_repeats_before_dismiss
                     ):
                         raw = await self.gs.dismiss_popup()
@@ -520,7 +559,10 @@ class Runner:
                         ledger.blocked_repeats = 0
                         retry_allowed = True
                     await self._sleep(self.cfg.blocked_repeat_wait_s)
-                    core = await self._observe()
+                    # Only sessions and deals while the AI turn is processing.
+                    core = await self._observe(
+                        reactive_from=core if in_flight else None
+                    )
                     continue
                 retry_allowed = False
                 t0 = time.perf_counter()
@@ -539,6 +581,9 @@ class Runner:
                 self._game_ms += elapsed
                 self._log_turn(outcome, elapsed)
                 in_flight = outcome.status == "blocked" and outcome.end_turn_in_flight
+                if in_flight and self.spectator is not None:
+                    # the engine is still processing the AI turn: stay quiet
+                    self.spectator.quiet(True)
                 if outcome.status == "advanced":
                     self._turns += 1
                     blocked = None

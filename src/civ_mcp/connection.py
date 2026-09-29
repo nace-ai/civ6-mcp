@@ -33,6 +33,10 @@ class GameConnection:
     # already buffered.
     PRE_DRAIN_S = 0.01
     POST_DRAIN_S = 0.02
+    # After a command timed out without its sentinel, its late output is still
+    # coming: drain long before the next command so it is not misread as that
+    # command's result.
+    DIRTY_DRAIN_S = 0.5
 
     def __init__(self, host: str = "127.0.0.1", port: int = 4318):
         self.host = host
@@ -46,6 +50,7 @@ class GameConnection:
         self._replay_on_disconnect = True
         self.roundtrips = 0
         self.roundtrip_ms = 0.0
+        self.dirty = False
 
     def snapshot_counters(self) -> tuple[int, float]:
         """(round trips so far, cumulative milliseconds) for attribution."""
@@ -201,8 +206,12 @@ class GameConnection:
         assert self._reader is not None
         assert self._writer is not None
 
-        # Drain any stale messages
-        await tuner_client.drain_messages(self._reader, timeout=self.PRE_DRAIN_S)
+        # Drain any stale messages (long when the previous command timed out)
+        await tuner_client.drain_messages(
+            self._reader,
+            timeout=self.DIRTY_DRAIN_S if self.dirty else self.PRE_DRAIN_S,
+        )
+        self.dirty = False
 
         await tuner_client.send_message(
             self._writer, tuner_client.TAG_COMMAND, f"CMD:{state_index}:{lua_code}"
@@ -210,6 +219,7 @@ class GameConnection:
 
         lines: list[str] = []
         deadline = asyncio.get_running_loop().time() + timeout
+        complete = False
 
         while True:
             remaining = deadline - asyncio.get_running_loop().time()
@@ -228,10 +238,13 @@ class GameConnection:
             text = _parse_output(msg.payload)
             if text is not None:
                 if text.strip() == SENTINEL:
+                    complete = True
                     break
                 lines.append(text)
             # Ignore non-output messages (e.g. tag=3 empty ack)
 
+        if not complete:
+            self.dirty = True
         # Drain any trailing unsolicited output
         await tuner_client.drain_messages(self._reader, timeout=self.POST_DRAIN_S)
         return lines

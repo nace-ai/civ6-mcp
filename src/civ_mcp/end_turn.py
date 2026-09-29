@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import time
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -46,6 +46,12 @@ def _is_consequential(blocking_type: str) -> bool:
         "WORLD_CONGRESS" in blocking_type
         and blocking_type != "ENDTURN_BLOCKING_WORLD_CONGRESS_LOOK"
     )
+
+
+def _poll_sleep_s(gs: GameState) -> float:
+    """Recovery polling sleep: short in decision-only mode, the legacy 2 s
+    otherwise (the MCP path keeps its original timing)."""
+    return 0.5 if _decision_only(gs) else 2.0
 
 
 def _stamp(gs: GameState, name: str, t0: float) -> float:
@@ -1384,7 +1390,7 @@ async def execute_end_turn(gs: GameState) -> str:
                 if not _decision_only(gs):
                     await gs.conn.execute_write(lua)
                 for _ in range(5):
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(_poll_sleep_s(gs))
                     turn_after = await _get_turn_number(gs)
                     if (
                         turn_after is not None
@@ -1398,7 +1404,7 @@ async def execute_end_turn(gs: GameState) -> str:
 
     if not advanced:
         # Final verification — turn may have slipped through
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(_poll_sleep_s(gs))
         turn_after = await _get_turn_number(gs)
         if (
             turn_after is not None

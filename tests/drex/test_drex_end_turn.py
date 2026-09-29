@@ -319,3 +319,11 @@ def test_legacy_mode_keeps_narration_checks(monkeypatch):
     conn = ScriptedConn([], advance_on_end_turn=True)
     asyncio.run(execute_end_turn(_gs(conn, decision_only=False)))
     assert "victory" in called and "warnings" in called
+
+
+def test_recovery_poll_sleep_is_short_only_in_decision_only_mode():
+    from civ_mcp.end_turn import _poll_sleep_s
+
+    conn = ScriptedConn([])
+    assert _poll_sleep_s(_gs(conn, decision_only=True)) == 0.5
+    assert _poll_sleep_s(_gs(conn, decision_only=False)) == 2.0

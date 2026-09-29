@@ -14,11 +14,11 @@ from civ_mcp.drex.candidates import (
 from civ_mcp.drex.client import DrexAuthError, DrexUnavailable
 from civ_mcp.drex.decision import ChoiceAnswer
 from civ_mcp.drex.selectors import (
+    ControllerFilteringError,
     DrexSelector,
     RandomSelector,
-    ReplaySelector,
-    ControllerFilteringError,
     ReplayRejected,
+    ReplaySelector,
     select,
 )
 
@@ -227,3 +227,23 @@ def test_invalid_request_is_a_non_retryable_wait():
     waits = []
     asyncio.run(_drex(client, on_wait=waits.append).choose(_point()))
     assert len(client.calls) == 2 and waits[0]["retryable"] is False
+
+
+def test_refresh_client_failure_is_reported_and_the_old_client_kept():
+    from civ_mcp.drex.client import DrexConfigError
+
+    bad = _ScriptedClient(DrexAuthError("HTTP 401"), DrexAuthError("HTTP 401"), GOOD)
+    attempts = {"n": 0}
+
+    async def refresh():
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise DrexConfigError("DREX_API_KEY is not set")
+        return bad
+
+    waits = []
+    result = asyncio.run(
+        _drex(bad, refresh_client=refresh, on_wait=waits.append).choose(_point())
+    )
+    assert result.decision.candidate_id == "research:TECHNOLOGY_POTTERY"
+    assert any(w["error_class"] == "DrexConfigError" for w in waits)

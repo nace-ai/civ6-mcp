@@ -277,3 +277,95 @@ def test_live_spectator_does_not_poll_on_its_own():
         assert conn.lua == []
 
     asyncio.run(scenario())
+
+
+# --------------------------------------------- review fixes: quiet is airtight
+def test_quiet_cancels_a_pending_dismissal(monkeypatch):
+    started = []
+
+    async def slow_dismiss(conn):
+        started.append("dismiss")
+        await asyncio.sleep(10)
+        return "Dismissed X"
+
+    monkeypatch.setattr("civ_mcp.game_lifecycle.dismiss_popup", slow_dismiss)
+
+    class Conn:
+        async def execute_write(self, lua, timeout=5.0):
+            return ["---END---"]
+
+    async def scenario():
+        s = LiveSpectator(Conn())
+        s.start()
+        s.popups._first_seen = -5.0  # popup seen long ago: next report dismisses
+        s.popup_status("POPUP")
+        await asyncio.sleep(0)
+        assert started == ["dismiss"]
+        s.quiet(True)
+        await asyncio.sleep(0)
+        assert s._pending is None or s._pending.cancelled() or s._pending.done()
+        s.popup_status("POPUP")  # ignored while quiet
+        await asyncio.sleep(0)
+        assert len(started) == 1
+        await s.stop()
+
+    asyncio.run(scenario())
+
+
+def test_report_swallows_dismiss_errors_and_resets(monkeypatch):
+    async def failing(conn):
+        raise ConnectionError("socket closed")
+
+    monkeypatch.setattr("civ_mcp.game_lifecycle.dismiss_popup", failing)
+    from civ_mcp.spectator import PopupWatcher
+
+    async def scenario():
+        w = PopupWatcher(conn=None, poll=False)
+        await w.report("POPUP", now=0.0)
+        await w.report("POPUP", now=2.0)  # dismiss raises inside
+        assert w._first_seen is None
+        await w.report("POPUP", now=3.0)  # starts a fresh timer, no exception
+
+    asyncio.run(scenario())
+
+
+def test_no_popup_feed_or_dismissal_while_end_turn_is_in_flight(tmp_path):
+    from civ_mcp.end_turn import EndTurnOutcome
+
+    game = FakeGame()
+    spec = RecordingSpectator()
+    normal = _fake_end_turn(game)
+    first = {"v": True}
+
+    async def end_turn(gs):
+        if first["v"]:
+            first["v"] = False
+            game.sessions = [fx.session()]
+            return EndTurnOutcome(
+                status="blocked",
+                turn_before=5,
+                turn_after=5,
+                diplomacy_pending=[1],
+                end_turn_in_flight=True,
+            )
+        return await normal(gs)
+
+    log = DecisionLog(tmp_path / "run.jsonl", run_id="drex-test", secrets=[])
+    runner = Runner(
+        game,
+        PreferSelector(
+            prefixes=("diplomacy:1:POSITIVE", "skip:", "research:", "produce:")
+        ),
+        log,
+        RunConfig(turns=1),
+        end_turn=end_turn,
+        spectator=spec,
+    )
+    asyncio.run(runner.run())
+    kinds = [e[0] for e in spec.events]
+    i = kinds.index("quiet_on")
+    j = kinds.index("quiet_off", i)
+    # quiet must hold from the first end turn until the turn actually advances
+    assert "popup" not in kinds[i:j] and "focus" not in kinds[i:j]
+    assert kinds.count("quiet_on") >= 1
+    assert game.turn == 6

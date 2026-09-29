@@ -80,6 +80,10 @@ class LiveSpectator:
     def quiet(self, on: bool) -> None:
         self._quiet = on
         self.camera.quiet(on)
+        if on and self._pending is not None and not self._pending.done():
+            # No UI Lua while the engine processes the AI turn.
+            self._pending.cancel()
+            self._pending = None
 
     def focus(self, x: int, y: int, label: str = "") -> None:
         self.camera.push(x, y, label)

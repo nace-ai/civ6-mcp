@@ -210,3 +210,36 @@ def test_turn_ending_rule_leaving_one_order_is_labeled_as_such():
     )
     assert [c.kind for c in point.candidates] == [ActionKind.SKIP_UNIT]
     assert point.forced_rule == "forced_turn_ending_order"
+
+
+def test_close_the_screen_is_forced_when_every_response_failed():
+    import asyncio
+
+    import drex_fixtures as fx
+    from drex_fakes import FakeGame
+
+    from civ_mcp.drex.candidates import DecisionCategory
+    from civ_mcp.drex.live import LiveObserver
+    from civ_mcp.drex.observation import DecisionMemory, DecisionSpec
+    from civ_mcp.drex.points import build_decision_point
+
+    game = FakeGame()
+    game.sessions = [fx.session()]
+    obs = LiveObserver(game)
+    core = asyncio.run(obs.core())
+    spec = DecisionSpec(DecisionCategory.DIPLOMACY, "player:1")
+    inputs = asyncio.run(obs.inputs(spec, core))
+    point, _ = build_decision_point(
+        spec,
+        core,
+        inputs,
+        DecisionMemory(),
+        objective="o",
+        decision_id="T5#9",
+        max_options=255,
+        failed={"diplomacy:1:POSITIVE", "diplomacy:1:NEGATIVE"},
+        allow_exit=True,
+    )
+    assert point is not None
+    assert [c.params.response for c in point.candidates] == ["EXIT"]
+    assert point.forced_rule == "forced_close_screen"
