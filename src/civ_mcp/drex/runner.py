@@ -18,6 +18,7 @@ from civ_mcp.drex.points import build_decision_point
 from civ_mcp.drex.scheduler import SCHEDULER_ORDER, EndTurn, Scheduler, Stop, TurnLedger
 from civ_mcp.drex.selectors import SelectionPaused, Selector, build_request, select
 from civ_mcp.drex.serialize import to_jsonable
+from civ_mcp.drex.spectate import Spectator, focus_point
 from civ_mcp.end_turn import EndTurnOutcome, execute_end_turn_typed
 from civ_mcp.game_lifecycle import save_game
 
@@ -84,6 +85,7 @@ class Runner:
         observer: LiveObserver | None = None,
         executor: Executor | None = None,
         run_meta: dict[str, Any] | None = None,
+        spectator: Spectator | None = None,
     ):
         if selector is None and not config.dry_run:
             raise ValueError("a selector is required unless dry_run is set")
@@ -96,6 +98,7 @@ class Runner:
         self._checkpoint = checkpoint or _default_checkpoint
         self.observer = observer or LiveObserver(gs, nearby_radius=config.nearby_radius)
         self.executor = executor or Executor(gs)
+        self.spectator = spectator
         self.scheduler = Scheduler(
             max_unit_decisions=config.max_unit_decisions,
             max_decisions_per_turn=config.max_decisions_per_turn,
@@ -126,6 +129,8 @@ class Runner:
 
     async def run(self) -> RunResult:
         self._t0 = time.perf_counter()
+        if self.spectator is not None:
+            self.spectator.start()
         try:
             return await self._run()
         except asyncio.CancelledError:
@@ -135,6 +140,16 @@ class Runner:
             return await self._stop(
                 f"error:{type(e).__name__}: {e}", self._last_core, checkpoint=True
             )
+        finally:
+            if self.spectator is not None:
+                await self.spectator.stop()
+
+    def _follow(self, candidate: Any, core: CoreObservation) -> None:
+        if self.spectator is None:
+            return
+        where = focus_point(candidate, core)
+        if where is not None:
+            self.spectator.focus(*where)
 
     async def _run(self) -> RunResult:
         core = await self._observe()
@@ -243,6 +258,8 @@ class Runner:
                 if outcome.status == "advanced":
                     self._turns += 1
                     blocked = None
+                    if self.spectator is not None:
+                        self.spectator.turn_advanced()
                     self.memory.record(
                         Fact(
                             outcome.turn_before or core.turn,
@@ -368,6 +385,8 @@ class Runner:
             self._game_ms += outcome.elapsed_ms
             self._decisions += 1
             blocked = None
+            if outcome.dispatched:
+                self._follow(candidate, core)
             self.scheduler.note(
                 ledger, step, candidate.kind, outcome, candidate.candidate_id
             )

@@ -39,6 +39,7 @@ from civ_mcp.drex.points import build_decision_point
 from civ_mcp.drex.runner import DEFAULT_OBJECTIVE, RunConfig, Runner
 from civ_mcp.drex.selectors import DrexSelector, RandomSelector, build_request
 from civ_mcp.drex.serialize import from_jsonable
+from civ_mcp.drex.spectate import LiveSpectator
 
 SUCCESS_STOPS = {"turn_budget_reached", "game_over", "dry_run_complete"}
 
@@ -160,7 +161,8 @@ async def _run_live(args: argparse.Namespace, *, dry_run: bool) -> int:
             max_options=max_options,
             dry_run=dry_run,
         )
-        runner = Runner(gs, selector, log, config, run_meta=meta)
+        spectator = None if dry_run or args.no_spectator else LiveSpectator(conn)
+        runner = Runner(gs, selector, log, config, run_meta=meta, spectator=spectator)
         result = await runner.run()
         if dry_run and args.save_fixture and runner.preview:
             Path(args.save_fixture).write_text(json.dumps(runner.preview, indent=2))
@@ -322,6 +324,11 @@ def _parser() -> argparse.ArgumentParser:
                 "--selector", choices=["drex", "random-baseline"], default="drex"
             )
             sp.add_argument("--seed", type=int, default=0, help="random-baseline seed")
+            sp.add_argument(
+                "--no-spectator",
+                action="store_true",
+                help="do not auto-dismiss popups or follow the action with the camera",
+            )
         else:
             sp.add_argument(
                 "--call-drex",
