@@ -16,6 +16,7 @@ observe (typed) -> scheduler picks one entity -> enumerate candidates -> Drex ch
 | C — 20 consecutive turns | Not run, same reasons. The runner, logging and stop/checkpoint paths are implemented and tested against an in-memory game. |
 | D — broader coverage, random baseline comparison | Not started beyond the labeled `random-baseline` selector. |
 | Phase 1 — resilience and speed (spec `docs/superpowers/specs/2026-09-30-civ-drex-never-stop-design.md`) | Done 2026-09-30 on branch `drex-phase1`. A run no longer ends for Drex API errors, tuner errors or loop guards; a full observation is 2 batched round trips; live turns 47–51 took 13–17 s wall including the AI turn (was ~54 s). See "Speed" and "No stops for infrastructure" below. |
+| Phase 2 — early-game blockers (plan `docs/superpowers/plans/2026-09-30-civ-drex-phase2-early-blockers.md`) | Implemented 2026-09-30 on branch `drex-phase2`, offline (the game was closed): unit promotion, governors, era dedication, Great People, religion founding and added beliefs, city and district ranged attacks, plus the engine blocker coverage test. Not yet run against a live game; `civ-drex probe --kind <name>` checks each new query read-only before relying on it. |
 
 A Drex key (`nace_sk_...`, created at https://drex.nace.ai) is required; `apikey_` keys belong to TypeSafe and are rejected by drex.nace.ai with 401.
 
@@ -98,7 +99,11 @@ The tuner is the bottleneck, not Drex: one round trip costs about 57 ms (it was 
 - The popup watcher no longer polls: the observation carries the popup state, and camera and dismissals hold while the engine processes the AI turn.
 - In decision-only mode the end turn skips the narration-only victory and empire-warning reads and uses 0.5 s polling sleeps.
 
-Budget, enforced by `tests/drex/test_drex_speed.py`: at most 2 round trips to execute a decision and 1 for the partial refresh that follows. Every `decision` record carries `timing_ms.observe`, `observe_roundtrips`, `execute_roundtrips` and `roundtrips`; every advanced turn writes a `speed` record (decisions, seconds, round trips, Drex seconds, end-turn seconds, end-turn `phase_ms`) and a stderr line. `uv run python scripts/drex_timing.py logs/drex/<run>.jsonl` summarises a log. Measured live 2026-09-30 (turns 47–51, before Tasks 10–14): observe median 65 ms, execute 104 ms, Drex 522 ms, round trips median 3; turns 13–17 s wall including 2–8 s end turn.
+A unit promotion costs 3 execute round trips (promotable-units precheck, GameCore promote, and the stale-notification check inside `promote_unit`); it is exempt from the budget test. Budget, enforced by `tests/drex/test_drex_speed.py`: at most 2 round trips to execute a decision and 1 for the partial refresh that follows. Every `decision` record carries `timing_ms.observe`, `observe_roundtrips`, `execute_roundtrips` and `roundtrips`; every advanced turn writes a `speed` record (decisions, seconds, round trips, Drex seconds, end-turn seconds, end-turn `phase_ms`) and a stderr line. `uv run python scripts/drex_timing.py logs/drex/<run>.jsonl` summarises a log. Measured live 2026-09-30 (turns 47–51, before Tasks 10–14): observe median 65 ms, execute 104 ms, Drex 522 ms, round trips median 3; turns 13–17 s wall including 2–8 s end turn.
+
+## Blocker coverage
+
+`fixtures/drex/end_turn_blocking_types.txt` lists every member of the engine's `EndTurnBlockingTypes` enum (from the game's UI sources; `civ-drex probe --kind blockers` refreshes it with live values). `tests/drex/test_blocker_coverage.py` fails if any member is not in `SUPPORTED_BLOCKERS`, `HOUSEKEEPING_BLOCKERS` or `PHASE_LATER_BLOCKERS` in `scheduler.py`, so a new engine type cannot go unclassified.
 
 ## Scheduler order
 
@@ -106,9 +111,10 @@ The controller picks what is decided next; Drex only chooses within that entity'
 
 1. Open diplomacy sessions (ascending player id). Informational ones are closed and logged as housekeeping (never in dry-run): goodbye phases, and sessions from a player we are at war with that carry no deal. `is_at_war` describes the relationship, not the session, so an at-war session with a deal (e.g. a peace offer) is decided as a deal.
 2. Pending incoming deals.
-3. Blocker-driven: government prompt, empty policy slot (lowest index), envoys, pantheon.
+3. Blocker-driven: government prompt, empty policy slot (lowest index), envoys, pantheon, governor actions (any `GOVERNOR_*` blocker; up to 5 per turn), unit promotion (ascending unit id; the unit list comes from a GameCore XP-threshold query read only while the blocker stands), era dedication, forced Great Person claim, religion founding (three steps: religion, follower belief, founder belief + found), added belief, city or district ranged attack (per city, ascending id).
 4. Research, only when none is selected. 5. Civic, only when none is selected.
 6. Production for empty queues (ascending city id).
+6b. Great People, once per turn when someone is recruitable or affordable (the pool is read every 5 turns or when a claim is forced); "wait" is a real option unless the claim is forced.
 7. Units with moves left (ascending composite unit id), at most 3 decisions per unit per turn; a unit's last permitted decision offers only turn-ending orders.
 8. End turn (typed outcome).
 
@@ -130,6 +136,13 @@ The controller picks what is decided next; Drex only chooses within that entity'
 | Government | unlocked governments (new parser) + keep current | `change_government` / `keep_current_government` | current government / prompt cleared |
 | Envoy | `get_city_states`, `can_send_envoy` | `send_envoy(player)` | token spent |
 | Pantheon | `get_pantheon_status` | `choose_pantheon(belief)` | pantheon readback |
+| Unit promotion | `get_promotable_units` (new GameCore query with the XP-threshold rule) + `get_unit_promotions` | `promote_unit(unit_id, promotion)` | `PROMOTED|` in the dispatch output, else promotion count readback |
+| Governor appoint / assign / promote | `get_governors` (appointable, unplaced governors × own cities without one, promotions with points) | `appoint_governor` / `assign_governor` / `promote_governor` | `APPOINTED|`/`ASSIGNED|`/`PROMOTED|`, else governor readback |
+| Era dedication | `get_dedications().choices` not yet active, described for the current age | `choose_dedication(index)` | `DEDICATION_CHOSEN|`, else `active` readback |
+| Great Person | `get_great_people`: recruit (points), patronize (gold / faith within the treasury), wait (dropped when `CLAIM_GREAT_PERSON` forces a claim) | `recruit_great_person` / `patronize_great_person(id, yield)` / none | `RECRUITED|`/`PATRONIZED|`, else claimant readback; wait confirms as `no_action` |
+| Religion founding | `get_religion_founding_status`: step 1 religion, step 2 follower belief (both stored in the turn ledger, no dispatch), step 3 founder belief | `found_religion(religion, follower, founder)` | `RELIGION_FOUNDED|`, else `has_religion` readback; partial choices are dropped on a new turn or when the prompt disappears |
+| Added belief | every available belief of every class | `add_belief(belief)` (new Lua, `PlayerOperations.ADD_BELIEF`) | `BELIEF_ADDED|`, else belief no longer offered |
+| City / district ranged attack | `get_city_attack_targets(city)` (new Lua over `CityManager.GetCommandTargets`) plus "hold fire"; no targets → hold fire is the single legal option | `city_attack(city, x, y)` / none | `CITY_RANGE_ATTACK|` confirmed, else pending combat |
 
 Outcomes are `confirmed`, `pending` (accepted, effect asynchronous), `rejected` (stale/ineligible or game error with no effect, found on any line of the result) or `unknown`. Every candidate is re-checked against fresh state immediately before dispatch (unit identity by composite id, position, moves, destination/target still offered, queue still empty, choice still unset...); this precheck, not the observation-version check, is what catches stale choices in the single-threaded loop. A candidate is dispatched at most once per turn for a given observed state (another envoy while tokens remain, or a reply in a new dialogue round, counts as a new action). Dispatch runs inside `GameConnection.replay_disabled()`, so a dropped socket raises instead of silently re-sending the Lua; a dispatch that raises is reconciled by reading state, never retried.
 
@@ -160,5 +173,6 @@ Per decision: the configured objective; turn; own empire totals (gold, yields, c
 - Nothing here has run against a live game. `build_unit_action_space_query` uses `GetReachableMovement`, `GetAdjacentPlot`, `PlayersVisibility:IsVisible` and `CanStartOperation` as existing queries do, but its exact output needs confirming with `civ-drex probe` before relying on it. `PlayerCulture:CanProgress` is unverified (prerequisite fallback is logged).
 - Drex option and context limits are unverified; defaults follow TypeSafe's documented limits.
 - Foreign units on visible tiles come from iterating all players' units, which may include units the player cannot see (e.g. stealth units). Found/fortify eligibility uses the same loose `CanStartOperation(..., true)` check as existing tools; postconditions catch failures.
-- Not supported yet: district/wonder placement, city attacks, multi-turn movement, promotions, governors, religion beyond pantheon, great people, trade routes, espionage, purchases, World Congress, city capture decisions.
+- Not supported yet (classified as `PHASE_LATER_BLOCKERS` in `scheduler.py`; the run waits on them): captured and disloyal cities, spy escape and dragnet, artifacts, emergencies, World Congress sessions. Also not yet: district/wonder placement, multi-turn movement, trade routes, espionage missions, purchases, unit upgrades.
+- Phase 2 kinds have not run against a live game yet. Known items to verify with `civ-drex probe --kind`: `u:GetID()` as the composite id in the GameCore promotable-units query; `CityManager.GetCommandTargets` including encampment targets for `DISTRICT_RANGE_ATTACK`; whether "hold fire" leaves the `CITY_RANGE_ATTACK` blocker standing (fallback: dismiss the notification as housekeeping); the real `EndTurnBlockingTypes` values (`fixtures/drex/end_turn_blocking_types.txt` carries -1 placeholders).
 - The random-baseline comparison and CivBench integration (Milestone D) are not done; any CivBench use must be labeled a custom open-track agent.

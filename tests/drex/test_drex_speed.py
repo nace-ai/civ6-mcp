@@ -226,7 +226,8 @@ def test_decision_round_trip_budget(tmp_path):
     over = [
         (r["decision_id"], r["dispatch"]["method"], r["timing_ms"])
         for r in decisions
-        if r["timing_ms"]["execute_roundtrips"] > 2
+        if r["dispatch"]["method"] != "promote_unit"  # 3 by design, see docs/drex.md
+        and r["timing_ms"]["execute_roundtrips"] > 2
         or min(r["timing_ms"]["observe_roundtrips"], 1)
         + r["timing_ms"]["execute_roundtrips"]
         > 3
