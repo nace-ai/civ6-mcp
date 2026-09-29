@@ -470,3 +470,68 @@ def test_research_precheck_reuses_progress_from_inputs():
     )
     # one read for the postcondition, none for the precheck
     assert game.query_counts["get_progress_types"] == n + 1
+
+
+# ------------------------------------------ confirm from dispatch output (C4)
+def _move_point(game):
+    obs, point, inputs = _live_point(
+        game, DecisionCategory.UNIT, f"unit:{fx.WARRIOR_ID}"
+    )
+    return obs, point, inputs, _cand(point.candidates, ActionKind.MOVE_UNIT)
+
+
+def _execute(game, obs, point, inputs, cand, executor=None):
+    ex = executor or Executor(game, sleep=_no_sleep)
+    return asyncio.run(
+        ex.execute(cand, point, current_version=obs.version, turn=5, inputs=inputs)
+    )
+
+
+def test_move_confirmed_from_dispatch_output_without_polling():
+    game = FakeGame()
+    obs, point, inputs, cand = _move_point(game)
+    n = game.query_counts["get_unit_state"]
+    outcome = _execute(game, obs, point, inputs, cand)
+    assert outcome.status is OutcomeStatus.CONFIRMED
+    assert outcome.reason == "arrived_from_dispatch"
+    assert game.query_counts["get_unit_state"] == n
+
+
+def test_move_without_position_in_output_still_polls():
+    game = FakeGame()
+    game.move_result_suffix = ""
+    obs, point, inputs, cand = _move_point(game)
+    n = game.query_counts["get_unit_state"]
+    outcome = _execute(game, obs, point, inputs, cand)
+    assert outcome.reason in ("arrived", "moved_partially", "no_position_change")
+    assert game.query_counts["get_unit_state"] > n
+
+
+def test_production_confirmed_from_dispatch_when_readback_raises():
+    from civ_mcp.connection import LuaError
+
+    game = FakeGame()
+    game.fail["verify_production"] = (LuaError("ERR: attempt to call nil"), False)
+    obs, point, inputs = _live_point(
+        game, DecisionCategory.PRODUCTION, f"city:{fx.CAPITAL_ID}"
+    )
+    cand = point.candidates[0]
+    outcome = _execute(game, obs, point, inputs, cand)
+    assert outcome.status is OutcomeStatus.CONFIRMED
+    assert outcome.reason == "production_confirmed_from_dispatch"
+
+
+def test_move_skips_predismiss_when_observation_says_no_popup():
+    game = FakeGame()
+    obs, point, inputs, cand = _move_point(game)
+    ex = Executor(game, sleep=_no_sleep, popup_state_provider=lambda: "CLEAR")
+    _execute(game, obs, point, inputs, cand, executor=ex)
+    assert game.move_predismiss == [False]
+
+
+def test_move_keeps_predismiss_when_a_popup_is_visible():
+    game = FakeGame()
+    obs, point, inputs, cand = _move_point(game)
+    ex = Executor(game, sleep=_no_sleep, popup_state_provider=lambda: "POPUP")
+    _execute(game, obs, point, inputs, cand, executor=ex)
+    assert game.move_predismiss == [True]

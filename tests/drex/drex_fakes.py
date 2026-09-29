@@ -70,6 +70,9 @@ class FakeGame:
         self.fail: dict[str, tuple[Exception, bool]] = {}
         self.ignore: set[str] = set()
         self.end_turn_calls = 0
+        # like the real game: the move result reports the position read back
+        self.move_result_suffix = "|now_at:{x},{y}"
+        self.move_predismiss: list[bool] = []
 
     # ---------------------------------------------------------------- helpers
     def _record(self, method, *args):
@@ -154,6 +157,7 @@ class FakeGame:
         return copy.deepcopy(self.spaces.get(unit_index))
 
     async def get_unit_state(self, unit_index):
+        self.query_counts["get_unit_state"] += 1
         u = self._by_index(unit_index)
         if u is None:
             return None
@@ -187,6 +191,9 @@ class FakeGame:
         return tiles
 
     async def verify_production(self, city_id, item_name):
+        fail = self.fail.pop("verify_production", None)
+        if fail:
+            raise fail[0]
         return self.cities[city_id].currently_building == item_name
 
     async def city_exists_at(self, x, y):
@@ -256,12 +263,16 @@ class FakeGame:
         self._after(fail)
         return f"PRODUCING|{item_name}|8 turns"
 
-    async def move_unit(self, unit_index, x, y):
+    async def move_unit(self, unit_index, x, y, predismiss=True):
         fail = self._record("move_unit", unit_index, x, y)
+        self.move_predismiss.append(predismiss)
         if "move_unit" not in self.ignore:
             self._set_pos(unit_index, x, y, 0.0)
         self._after(fail)
-        return f"MOVING_TO|{x},{y}|from:0,0"
+        # Like the real game, the readback reports where the unit actually is.
+        u = self._by_index(unit_index)
+        now = self.move_result_suffix.format(x=u.x, y=u.y) if u else ""
+        return f"MOVING_TO|{x},{y}|from:0,0" + now
 
     async def attack_unit(self, unit_index, x, y):
         fail = self._record("attack_unit", unit_index, x, y)

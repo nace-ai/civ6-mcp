@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
+import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -45,6 +46,7 @@ from civ_mcp.drex.candidates import (
     UnitRef,
 )
 from civ_mcp.drex.decision import StaleDecision, ensure_current
+from civ_mcp.connection import LuaError
 from civ_mcp.drex.observation import DecisionInputs
 
 EMPTY_QUEUE_STATES = frozenset({"nothing", "NONE", "CORRUPTED_QUEUE", ""})
@@ -79,9 +81,16 @@ class ActionOutcome:
 class DispatchCall:
     method: str
     args: tuple[Any, ...]
+    kwargs: dict[str, Any] = field(default_factory=dict)
 
     def to_record(self) -> dict[str, Any]:
-        return {"method": self.method, "args": [_plain(a) for a in self.args]}
+        rec: dict[str, Any] = {
+            "method": self.method,
+            "args": [_plain(a) for a in self.args],
+        }
+        if self.kwargs:
+            rec["kwargs"] = dict(self.kwargs)
+        return rec
 
 
 def _plain(value: Any) -> Any:
@@ -171,8 +180,12 @@ class Executor:
         poll_attempts: int = 6,
         poll_interval_s: float = 0.25,
         sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep,
+        popup_state_provider: Callable[[], str] | None = None,
     ):
         self.gs = gs
+        # "CLEAR" | "POPUP" | "CRITICAL" as last observed; lets a move skip the
+        # pre-dismiss round trip when nothing is on screen.
+        self._popup_state = popup_state_provider
         self._poll_attempts = max(1, poll_attempts)
         self._poll_interval_s = poll_interval_s
         self._sleep = sleep
@@ -233,11 +246,19 @@ class Executor:
             )
 
         call = dispatch_call(candidate)
+        if (
+            candidate.kind is ActionKind.MOVE_UNIT
+            and self._popup_state is not None
+            and self._popup_state() == "CLEAR"
+        ):
+            call = dataclasses.replace(
+                call, kwargs={**call.kwargs, "predismiss": False}
+            )
         self._dispatched.add(key)
         raw, error = "", None
         try:
             with _no_replay(self.gs):
-                result = await getattr(self.gs, call.method)(*call.args)
+                result = await getattr(self.gs, call.method)(*call.args, **call.kwargs)
             raw = result if isinstance(result, str) else str(result)
         except Exception as e:
             error = f"{type(e).__name__}: {e}"
@@ -493,15 +514,23 @@ class Executor:
                 return self._unconfirmed(raw, "selection_not_observed")
 
             case ActionKind.SET_PRODUCTION:
-                if await self._poll(
-                    lambda: gs.verify_production(p.city_id, p.item_name)
-                ):
-                    return confirmed("production_readback_confirmed")
+                try:
+                    if await self._poll(
+                        lambda: gs.verify_production(p.city_id, p.item_name)
+                    ):
+                        return confirmed("production_readback_confirmed")
+                except LuaError:
+                    pass  # readback unavailable; fall back to the dispatch output
+                if raw.startswith("PRODUCING|") and f"|{p.item_name}|" in raw + "|":
+                    return confirmed("production_confirmed_from_dispatch")
                 return self._unconfirmed(raw, "production_not_observed")
 
             case ActionKind.MOVE_UNIT:
                 origin = pre["origin"]
                 last = None
+                m = re.search(r"\|now_at:(\d+),(\d+)", raw)
+                if m and (int(m.group(1)), int(m.group(2))) == (p.to_x, p.to_y):
+                    return confirmed("arrived_from_dispatch", position=[p.to_x, p.to_y])
 
                 async def arrived():
                     nonlocal last

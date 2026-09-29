@@ -349,12 +349,16 @@ class GameState:
     # Action methods (run in InGame context for UnitManager access)
     # ------------------------------------------------------------------
 
-    async def move_unit(self, unit_index: int, target_x: int, target_y: int) -> str:
-        # Pre-dismiss any blocking popups that would silently eat the move
-        try:
-            await self.dismiss_popup()
-        except Exception:
-            pass
+    async def move_unit(
+        self, unit_index: int, target_x: int, target_y: int, predismiss: bool = True
+    ) -> str:
+        # Pre-dismiss any blocking popups that would silently eat the move.
+        # Callers that just observed a clear screen pass predismiss=False.
+        if predismiss:
+            try:
+                await self.dismiss_popup()
+            except Exception:
+                pass
         lua = lq.build_move_unit(unit_index, target_x, target_y)
         lines = await self.conn.execute_write(lua)
         result = _action_result(lines)

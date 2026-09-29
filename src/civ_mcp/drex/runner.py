@@ -98,7 +98,12 @@ class Runner:
         self._end_turn = end_turn or _default_end_turn
         self._checkpoint = checkpoint or _default_checkpoint
         self.observer = observer or LiveObserver(gs, nearby_radius=config.nearby_radius)
-        self.executor = executor or Executor(gs)
+        self.executor = executor or Executor(
+            gs,
+            popup_state_provider=lambda: (
+                self._last_core.popup_state if self._last_core else "POPUP"
+            ),
+        )
         self.spectator = spectator
         self.scheduler = Scheduler(
             max_unit_decisions=config.max_unit_decisions,
