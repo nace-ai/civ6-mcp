@@ -20,6 +20,7 @@ from civ_mcp.drex.decision_log import DecisionLog
 from civ_mcp.drex.live import LiveObserver
 from civ_mcp.drex.runner import RunConfig, Runner
 from civ_mcp.drex.spectate import LiveSpectator, focus_point
+from civ_mcp.spectator import CameraController
 
 
 class RecordingSpectator:
@@ -37,6 +38,12 @@ class RecordingSpectator:
 
     def turn_advanced(self):
         self.events.append(("turn",))
+
+    def popup_status(self, state):
+        self.events.append(("popup", state))
+
+    def quiet(self, on):
+        self.events.append(("quiet_on",) if on else ("quiet_off",))
 
 
 def _unit_ref(game, idx):
@@ -166,5 +173,101 @@ def test_live_spectator_wraps_camera_and_popup_watcher():
         s.focus(1, 2, "x")
         s.turn_advanced()
         await s.stop()
+
+    asyncio.run(scenario())
+
+
+# ------------------------------------------------ no contention, quiet (C6)
+def test_spectator_is_quiet_during_end_turn(tmp_path):
+    game = FakeGame()
+    spec = RecordingSpectator()
+    asyncio.run(_runner(game, tmp_path, spec).run())
+    kinds = [e[0] for e in spec.events]
+    i = kinds.index("quiet_on")
+    j = kinds.index("quiet_off", i)
+    assert "focus" not in kinds[i:j]
+
+
+def test_runner_feeds_popup_status_from_each_observation(tmp_path):
+    game = FakeGame()
+    spec = RecordingSpectator()
+    asyncio.run(_runner(game, tmp_path, spec).run())
+    statuses = [e for e in spec.events if e[0] == "popup"]
+    assert statuses and all(e[1] in ("CLEAR", "POPUP", "CRITICAL") for e in statuses)
+
+
+def test_popup_watcher_external_mode_dismisses_after_delay(monkeypatch):
+    from civ_mcp import spectator as sp
+
+    calls = []
+
+    async def fake_dismiss(conn):
+        calls.append("dismiss")
+        return "Dismissed X"
+
+    monkeypatch.setattr("civ_mcp.game_lifecycle.dismiss_popup", fake_dismiss)
+
+    async def scenario():
+        w = sp.PopupWatcher(conn=None, poll=False)
+        await w.report("POPUP", now=0.0)
+        await w.report("POPUP", now=0.4)
+        assert calls == []
+        await w.report("POPUP", now=1.1)
+        assert calls == ["dismiss"]
+        await w.report("CRITICAL", now=2.0)
+        await w.report("POPUP", now=2.5)
+        await w.report("POPUP", now=3.0)
+        assert calls == ["dismiss"]  # timer reset by CRITICAL; not yet 1s
+
+    asyncio.run(scenario())
+
+
+def test_camera_holds_hops_while_critical_or_quiet():
+    class Conn:
+        def __init__(self):
+            self.lua = []
+
+        async def execute_write(self, lua, timeout=5.0):
+            self.lua.append(lua)
+            return ["---END---"]
+
+    async def scenario():
+        conn = Conn()
+        cam = CameraController(conn, check_diplomacy=False)
+        cam.set_critical(True)
+        cam.start()
+        cam.push(1, 2)
+        await asyncio.sleep(0.05)
+        assert conn.lua == []  # held: diplomacy screen up
+        cam.set_critical(False)
+        await asyncio.sleep(0.2)
+        assert any("LookAtPlot" in lua for lua in conn.lua)
+        assert not any("DiplomacyActionView" in lua for lua in conn.lua)
+        cam.quiet(True)
+        cam.push(3, 4)
+        n = len(conn.lua)
+        await asyncio.sleep(0.05)
+        assert len(conn.lua) == n  # held while quiet
+        await cam.stop()
+
+    asyncio.run(scenario())
+
+
+def test_live_spectator_does_not_poll_on_its_own():
+    class Conn:
+        def __init__(self):
+            self.lua = []
+
+        async def execute_write(self, lua, timeout=5.0):
+            self.lua.append(lua)
+            return ["CLEAR", "---END---"]
+
+    async def scenario():
+        conn = Conn()
+        s = LiveSpectator(conn)
+        s.start()
+        await asyncio.sleep(0.7)  # longer than the old 0.5 s poll interval
+        await s.stop()
+        assert conn.lua == []
 
     asyncio.run(scenario())

@@ -136,6 +136,8 @@ class Runner:
             core = await self.observer.core()
         self._game_ms += (time.perf_counter() - t0) * 1000.0
         self._last_core = core
+        if self.spectator is not None:
+            self.spectator.popup_status(core.popup_state)
         return core
 
     async def run(self) -> RunResult:
@@ -269,7 +271,15 @@ class Runner:
                     )
                 retry_allowed = False
                 t0 = time.perf_counter()
-                outcome = await self._end_turn(self.gs)
+                if self.spectator is not None:
+                    # No camera hops or popup dismissals (InGame calls) while
+                    # the engine processes the AI turn: they can hang it.
+                    self.spectator.quiet(True)
+                try:
+                    outcome = await self._end_turn(self.gs)
+                finally:
+                    if self.spectator is not None:
+                        self.spectator.quiet(False)
                 elapsed = (time.perf_counter() - t0) * 1000.0
                 self._game_ms += elapsed
                 self._log_turn(outcome, elapsed)

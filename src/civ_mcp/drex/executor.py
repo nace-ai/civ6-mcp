@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
+from civ_mcp.connection import LuaError
 from civ_mcp.drex.candidates import (
     ActionKind,
     AttackParams,
@@ -46,7 +47,6 @@ from civ_mcp.drex.candidates import (
     UnitRef,
 )
 from civ_mcp.drex.decision import StaleDecision, ensure_current
-from civ_mcp.connection import LuaError
 from civ_mcp.drex.observation import DecisionInputs
 
 EMPTY_QUEUE_STATES = frozenset({"nothing", "NONE", "CORRUPTED_QUEUE", ""})

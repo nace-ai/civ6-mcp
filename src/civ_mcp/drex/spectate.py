@@ -10,6 +10,8 @@ makes a game-rule decision; both are cosmetic.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from typing import TYPE_CHECKING, Protocol
 
 from civ_mcp.drex.candidates import (
@@ -37,21 +39,47 @@ class Spectator(Protocol):
 
     def turn_advanced(self) -> None: ...
 
+    def popup_status(self, state: str) -> None: ...
+
+    def quiet(self, on: bool) -> None: ...
+
 
 class LiveSpectator:
-    """Popup auto-dismiss plus camera follow on a live tuner connection."""
+    """Popup auto-dismiss plus camera follow on a live tuner connection.
+
+    Nothing here polls the game: the runner reads the popup state as part of
+    its own observation and hands it over through ``popup_status``.
+    """
 
     def __init__(self, conn: GameConnection) -> None:
-        self.camera = CameraController(conn)
-        self.popups = PopupWatcher(conn)
+        self.camera = CameraController(conn, check_diplomacy=False)
+        self.popups = PopupWatcher(conn, poll=False)
+        self._quiet = False
+        self._pending: asyncio.Task | None = None
 
     def start(self) -> None:
         self.camera.start()
         self.popups.start()
 
     async def stop(self) -> None:
+        if self._pending is not None and not self._pending.done():
+            self._pending.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._pending
         await self.camera.stop()
         await self.popups.stop()
+
+    def popup_status(self, state: str) -> None:
+        self.camera.set_critical(state == "CRITICAL")
+        if self._quiet:
+            return
+        if self._pending is None or self._pending.done():
+            # Dismissal is its own round trip; never block the decision loop.
+            self._pending = asyncio.ensure_future(self.popups.report(state))
+
+    def quiet(self, on: bool) -> None:
+        self._quiet = on
+        self.camera.quiet(on)
 
     def focus(self, x: int, y: int, label: str = "") -> None:
         self.camera.push(x, y, label)

@@ -107,12 +107,25 @@ class CameraController:
     the next hop. Pauses automatically during active diplomacy screens.
     """
 
-    def __init__(self, conn: "GameConnection") -> None:
+    def __init__(self, conn: "GameConnection", *, check_diplomacy: bool = True) -> None:
         self._conn = conn
         self._queue: asyncio.Queue[CameraEvent] = asyncio.Queue(
             maxsize=CAMERA_QUEUE_MAX
         )
         self._task: asyncio.Task | None = None
+        # With check_diplomacy=False the owner reports screen state through
+        # set_critical() instead of the controller spending a round trip per hop.
+        self._check_diplomacy = check_diplomacy
+        self._critical = False
+        self._quiet = False
+
+    def set_critical(self, flag: bool) -> None:
+        """A diplomacy screen is up (True) or gone (False); hops hold while up."""
+        self._critical = flag
+
+    def quiet(self, on: bool) -> None:
+        """Hold all hops (e.g. while the engine processes the AI turn)."""
+        self._quiet = on
 
     def push(self, x: int, y: int, label: str = "") -> None:
         """Push a camera event. Drops the oldest event if the queue is full."""
@@ -167,8 +180,13 @@ class CameraController:
     async def _run(self) -> None:
         while True:
             event = await self._queue.get()
-            # Hold until diplomacy screen closes.
+            # Hold until diplomacy screen closes / the owner lifts the hold.
             while True:
+                if self._quiet or self._critical:
+                    await asyncio.sleep(0.1)
+                    continue
+                if not self._check_diplomacy:
+                    break
                 try:
                     if not await self._is_diplomacy_active():
                         break
@@ -186,12 +204,36 @@ class PopupWatcher:
     while diplomacy screens are active (CRITICAL status).
     """
 
-    def __init__(self, conn: "GameConnection") -> None:
+    def __init__(self, conn: "GameConnection", *, poll: bool = True) -> None:
         self._conn = conn
         self._task: asyncio.Task | None = None
+        # poll=False: the owner already reads the popup state in its own
+        # round trip and calls report(); nothing is polled here.
+        self._poll_enabled = poll
+        self._first_seen: float | None = None
 
     def start(self) -> None:
-        self._task = asyncio.create_task(self._run(), name="popup-watcher")
+        if self._poll_enabled:
+            self._task = asyncio.create_task(self._run(), name="popup-watcher")
+
+    async def report(self, status: str, now: float | None = None) -> None:
+        """Apply the dismissal rule to an externally observed status."""
+        from civ_mcp.game_lifecycle import dismiss_popup
+
+        if now is None:
+            now = asyncio.get_running_loop().time()
+        if status != "POPUP":
+            # CRITICAL or CLEAR — reset timer
+            self._first_seen = None
+            return
+        if self._first_seen is None:
+            self._first_seen = now
+        elif now - self._first_seen >= POPUP_DISMISS_DELAY:
+            log.debug(
+                "PopupWatcher: dismissing popup after %.1fs", now - self._first_seen
+            )
+            self._first_seen = None
+            await dismiss_popup(self._conn)
 
     async def stop(self) -> None:
         if self._task:
@@ -223,9 +265,6 @@ class PopupWatcher:
         return "CLEAR"
 
     async def _run(self) -> None:
-        from civ_mcp.game_lifecycle import dismiss_popup
-
-        first_seen: float | None = None
         # Check for Win32 crash dialogs every N iterations (not every 0.5s)
         _crash_check_interval = 6  # every ~3 seconds
         _iteration = 0
@@ -234,25 +273,9 @@ class PopupWatcher:
             await asyncio.sleep(POPUP_POLL_INTERVAL)
             _iteration += 1
             try:
-                status = await self._poll()
-                now = asyncio.get_running_loop().time()
-
-                if status == "POPUP":
-                    if first_seen is None:
-                        first_seen = now
-                    elif now - first_seen >= POPUP_DISMISS_DELAY:
-                        log.debug(
-                            "PopupWatcher: dismissing popup after %.1fs",
-                            now - first_seen,
-                        )
-                        await dismiss_popup(self._conn)
-                        first_seen = None
-                else:
-                    # CRITICAL or CLEAR — reset timer
-                    first_seen = None
-
+                await self.report(await self._poll())
             except Exception:
-                first_seen = None
+                self._first_seen = None
 
             # Periodically check for Win32 crash reporter dialogs.
             # These are OS-level dialogs outside the game's Lua layer.
