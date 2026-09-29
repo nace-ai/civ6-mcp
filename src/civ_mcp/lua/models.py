@@ -1287,3 +1287,85 @@ class BuilderInfo:
     y: int
     charges: int
     moves: float
+
+
+@dataclass
+class ReachableTile:
+    """A tile the engine reports reachable by a unit this turn."""
+
+    x: int
+    y: int
+    terrain: str
+    feature: str | None
+    resource: str | None  # only when the player's techs reveal it
+    is_hills: bool
+    is_river: bool
+    owner_id: int  # -1 unowned, -2 unknown (tile not currently visible)
+    visibility: str  # "visible" or "revealed"
+    own_stack_conflict: bool  # own unit of the same formation class already there
+    visible_foreign_unit: bool
+    distance: int
+
+
+@dataclass
+class AttackTarget:
+    """A currently visible hostile unit the engine accepts as an attack target."""
+
+    x: int
+    y: int
+    attack_type: str  # "MELEE" or "RANGED"
+    owner_id: int
+    owner_name: str
+    unit_type: str
+    hp: int
+    max_hp: int
+    distance: int
+    combat_strength: int
+
+
+@dataclass
+class UnitActionSpace:
+    unit_id: int  # composite ID
+    unit_index: int
+    unit_type: str
+    x: int
+    y: int
+    moves_remaining: float
+    is_civilian: bool
+    can_found: bool
+    can_fortify: bool
+    can_heal: bool
+    moved_into_zoc: bool
+    fortify_turns: int
+    hp: int
+    max_hp: int
+    reachable: list[ReachableTile] = field(default_factory=list)
+    targets: list[AttackTarget] = field(default_factory=list)
+
+
+@dataclass
+class UnitState:
+    """Minimal GameCore readback of one unit, for postcondition checks."""
+
+    x: int
+    y: int
+    moves_remaining: float
+    fortify_turns: int
+    hp: int
+    build_charges: int
+
+
+@dataclass
+class ProgressTypes:
+    research_type: str | None
+    civic_type: str | None
+
+
+@dataclass
+class GovernmentOption:
+    government_type: str
+    index: int
+    is_current: bool
+    name: str
+    slots: list[str] = field(default_factory=list)
+    bonus: str = ""

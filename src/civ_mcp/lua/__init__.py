@@ -18,6 +18,20 @@ works identically to the old monolithic ``lua_queries`` module.
 
 # Re-export helpers & sentinel
 from civ_mcp.lua._helpers import SENTINEL  # noqa: F401
+from civ_mcp.lua.action_space import (  # noqa: F401
+    build_eligibility_query,
+    build_government_change_considered,
+    build_progress_types_query,
+    build_unit_action_space_query,
+    build_unit_state_query,
+    build_wonder_types_query,
+    parse_available_governments,
+    parse_eligibility,
+    parse_progress_types,
+    parse_unit_action_space,
+    parse_unit_state,
+    parse_wonder_types,
+)
 from civ_mcp.lua.espionage import (  # noqa: F401
     build_get_spies_query,
     build_spy_escape_route,
@@ -145,6 +159,12 @@ from civ_mcp.lua.models import (  # noqa: F401
     AgendaInfo,
     AppointedGovernor,
     AgentExtras,
+    AttackTarget,
+    GovernmentOption,
+    ProgressTypes,
+    ReachableTile,
+    UnitActionSpace,
+    UnitState,
     BuilderInfo,
     BuilderTask,
     CityRow,

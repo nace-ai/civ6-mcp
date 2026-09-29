@@ -1,0 +1,152 @@
+"""Assemble one DecisionPoint: candidates, exclusions and model-visible context."""
+
+from __future__ import annotations
+
+import dataclasses
+
+from civ_mcp import lua as lq
+from civ_mcp.drex.candidates import (
+    ActionKind,
+    Candidate,
+    DecisionCategory,
+    DecisionPoint,
+    Exclusion,
+)
+from civ_mcp.drex.enumerate import (
+    civic_candidates,
+    deal_candidates,
+    diplomacy_candidates,
+    envoy_candidates,
+    government_candidates,
+    pantheon_candidates,
+    policy_candidates,
+    production_candidates,
+    research_candidates,
+    shortlist,
+    unit_candidates,
+)
+from civ_mcp.drex.observation import (
+    CoreObservation,
+    DecisionInputs,
+    DecisionMemory,
+    DecisionSpec,
+    build_context,
+)
+
+QUESTIONS: dict[DecisionCategory, str] = {
+    DecisionCategory.RESEARCH: "Which technology should the empire research next?",
+    DecisionCategory.CIVIC: "Which civic should the empire progress next?",
+    DecisionCategory.PRODUCTION: "What should this city produce next?",
+    DecisionCategory.UNIT: "What should this unit do now?",
+    DecisionCategory.DIPLOMACY: "How should we respond to this leader?",
+    DecisionCategory.DEAL: "Should we accept this trade deal?",
+    DecisionCategory.POLICY: "Which policy card should fill this government slot?",
+    DecisionCategory.ENVOY: "Which city-state should receive our envoy?",
+    DecisionCategory.GOVERNMENT: "Should the empire change its government now?",
+    DecisionCategory.PANTHEON: "Which pantheon belief should the empire adopt?",
+}
+
+
+def _policy_slot(status: lq.GovernmentStatus) -> lq.PolicySlot | None:
+    for slot in sorted(status.slots, key=lambda s: s.slot_index):
+        if slot.current_policy is None and policy_candidates(status, slot):
+            return slot
+    return None
+
+
+def _enumerate(
+    spec: DecisionSpec, core: CoreObservation, inputs: DecisionInputs
+) -> tuple[list[Candidate], list[Exclusion], str, DecisionInputs]:
+    cat = spec.category
+    entity = spec.entity
+    if cat is DecisionCategory.RESEARCH:
+        return research_candidates(core.tech), [], entity, inputs
+    if cat is DecisionCategory.CIVIC:
+        return civic_candidates(core.tech), [], entity, inputs
+    if (
+        cat is DecisionCategory.PRODUCTION
+        and inputs.city
+        and inputs.production_options is not None
+    ):
+        cands, excl = production_candidates(
+            inputs.city, inputs.production_options, set(inputs.wonder_types or ())
+        )
+        return cands, excl, entity, inputs
+    if cat is DecisionCategory.UNIT and inputs.unit and inputs.action_space:
+        cands, excl = unit_candidates(
+            inputs.action_space, inputs.unit, me=core.local_player_id
+        )
+        return cands, excl, entity, inputs
+    if cat is DecisionCategory.DIPLOMACY and inputs.session:
+        return diplomacy_candidates(inputs.session), [], entity, inputs
+    if cat is DecisionCategory.DEAL and inputs.deal:
+        return deal_candidates(inputs.deal), [], entity, inputs
+    if cat is DecisionCategory.POLICY and inputs.policies is not None:
+        slot = _policy_slot(inputs.policies)
+        if slot is None:
+            return [], [], entity, inputs
+        inputs = dataclasses.replace(inputs, slot_index=slot.slot_index)
+        return (
+            policy_candidates(inputs.policies, slot),
+            [],
+            f"slot:{slot.slot_index}",
+            inputs,
+        )
+    if cat is DecisionCategory.ENVOY and inputs.envoys is not None:
+        return envoy_candidates(inputs.envoys), [], entity, inputs
+    if cat is DecisionCategory.GOVERNMENT and inputs.governments is not None:
+        current = next(
+            (g.government_type for g in inputs.governments if g.is_current), "NONE"
+        )
+        return (
+            government_candidates(inputs.governments, current_type=current),
+            [],
+            entity,
+            inputs,
+        )
+    if cat is DecisionCategory.PANTHEON and inputs.pantheon is not None:
+        return pantheon_candidates(inputs.pantheon), [], entity, inputs
+    return [], [Exclusion(entity, f"no inputs for {cat}")], entity, inputs
+
+
+def build_decision_point(
+    spec: DecisionSpec,
+    core: CoreObservation,
+    inputs: DecisionInputs,
+    memory: DecisionMemory,
+    *,
+    objective: str,
+    decision_id: str,
+    max_options: int,
+    failed: frozenset[str] | set[str] = frozenset(),
+    exclude_kinds: frozenset[ActionKind] = frozenset(),
+) -> tuple[DecisionPoint | None, list[Exclusion]]:
+    candidates, excluded, entity, inputs = _enumerate(spec, core, inputs)
+    kept = []
+    for c in candidates:
+        if c.candidate_id in failed:
+            excluded.append(Exclusion(c.candidate_id, "failed earlier this turn"))
+        elif c.kind in exclude_kinds:
+            excluded.append(
+                Exclusion(
+                    c.candidate_id,
+                    "final decision for this unit this turn: turn-ending orders only",
+                )
+            )
+        else:
+            kept.append(c)
+    kept, cut = shortlist(kept, max_options)
+    excluded.extend(cut)
+    if not kept:
+        return None, excluded
+    point = DecisionPoint.create(
+        decision_id=decision_id,
+        category=spec.category,
+        entity=entity,
+        observation_version=core.version,
+        question=QUESTIONS[spec.category],
+        candidates=kept,
+        context=build_context(spec, core, inputs, memory, objective=objective),
+        exclusions=excluded,
+    )
+    return point, excluded

@@ -1,0 +1,245 @@
+"""Deterministic choice of what to decide next.
+
+The scheduler picks one category and entity; Drex only chooses within that
+entity's candidates. Order (documented because it affects results):
+
+1. reactive diplomacy sessions (ascending player id)
+2. incoming deals (ascending player id)
+3. blocker-driven: government prompt, policy slots, envoys, pantheon
+4. research, only when none is selected
+5. civic, only when none is selected
+6. production for empty queues (ascending city id)
+7. units with moves left (ascending composite unit id)
+8. end turn
+"""
+
+from __future__ import annotations
+
+from collections import Counter
+from dataclasses import dataclass, field
+
+from civ_mcp.drex.candidates import ActionKind, DecisionCategory
+from civ_mcp.drex.executor import EMPTY_QUEUE_STATES, ActionOutcome, OutcomeStatus
+from civ_mcp.drex.observation import CoreObservation, DecisionSpec
+
+SCHEDULER_ORDER = (
+    "diplomacy: open sessions, ascending player id",
+    "deal: pending incoming deals, ascending player id",
+    "government: when CONSIDER_GOVERNMENT_CHANGE blocks",
+    "policy: when FILL_CIVIC_SLOT blocks, lowest empty slot",
+    "envoy: when GIVE_INFLUENCE_TOKEN blocks",
+    "pantheon: when PANTHEON blocks",
+    "research: only when none selected",
+    "civic: only when none selected",
+    "production: empty queues, ascending city id",
+    "unit: moves left, ascending unit id, bounded decisions per unit",
+    "end turn",
+)
+
+GOVERNMENT_BLOCKER = "ENDTURN_BLOCKING_CONSIDER_GOVERNMENT_CHANGE"
+POLICY_BLOCKER = "ENDTURN_BLOCKING_FILL_CIVIC_SLOT"
+ENVOY_BLOCKER = "ENDTURN_BLOCKING_GIVE_INFLUENCE_TOKEN"
+PANTHEON_BLOCKER = "ENDTURN_BLOCKING_PANTHEON"
+
+SUPPORTED_BLOCKERS = frozenset(
+    {
+        "ENDTURN_BLOCKING_UNITS",
+        "ENDTURN_BLOCKING_STACKED_UNITS",
+        "ENDTURN_BLOCKING_PRODUCTION",
+        "ENDTURN_BLOCKING_RESEARCH",
+        "ENDTURN_BLOCKING_CIVIC",
+        GOVERNMENT_BLOCKER,
+        POLICY_BLOCKER,
+        ENVOY_BLOCKER,
+        PANTHEON_BLOCKER,
+    }
+)
+# Informational blockers that execute_end_turn clears and logs as housekeeping.
+HOUSEKEEPING_BLOCKERS = frozenset({"ENDTURN_BLOCKING_WORLD_CONGRESS_LOOK"})
+
+
+@dataclass
+class EndTurn:
+    pass
+
+
+@dataclass
+class Stop:
+    reason: str
+
+
+@dataclass
+class TurnLedger:
+    turn: int
+    resolved: set[str] = field(default_factory=set)
+    counts: Counter[str] = field(default_factory=Counter)
+    failures: Counter[str] = field(default_factory=Counter)
+    failed_candidates: set[str] = field(default_factory=set)
+    decisions: int = 0
+    blocked_end_turns: int = 0
+
+
+def key_for(spec: DecisionSpec) -> str:
+    if spec.category in (
+        DecisionCategory.RESEARCH,
+        DecisionCategory.CIVIC,
+        DecisionCategory.GOVERNMENT,
+        DecisionCategory.POLICY,
+        DecisionCategory.ENVOY,
+        DecisionCategory.PANTHEON,
+    ):
+        return str(spec.category)
+    return f"{spec.category}:{spec.entity_id}"
+
+
+def _informational(session) -> bool:
+    return session.is_at_war or session.buttons == "GOODBYE"
+
+
+class Scheduler:
+    def __init__(
+        self,
+        *,
+        max_unit_decisions: int = 3,
+        max_decisions_per_turn: int = 80,
+        max_failures_per_key: int = 2,
+        max_diplomacy_rounds: int = 4,
+        max_repeat_decisions: int = 6,
+    ):
+        self.max_unit_decisions = max_unit_decisions
+        self.max_decisions_per_turn = max_decisions_per_turn
+        self.max_failures_per_key = max_failures_per_key
+        self.max_diplomacy_rounds = max_diplomacy_rounds
+        self.max_repeat_decisions = max_repeat_decisions
+
+    def _limit(self, spec: DecisionSpec) -> int | None:
+        match spec.category:
+            case DecisionCategory.UNIT:
+                return self.max_unit_decisions
+            case DecisionCategory.DIPLOMACY:
+                return self.max_diplomacy_rounds
+            case DecisionCategory.POLICY | DecisionCategory.ENVOY:
+                return self.max_repeat_decisions
+        return None
+
+    def _open(self, ledger: TurnLedger, spec: DecisionSpec) -> bool:
+        key = key_for(spec)
+        if key in ledger.resolved:
+            return False
+        limit = self._limit(spec)
+        return limit is None or ledger.counts[key] < limit
+
+    def informational_sessions(self, core: CoreObservation) -> list[int]:
+        return sorted(
+            s.other_player_id for s in core.diplomacy_sessions if _informational(s)
+        )
+
+    def unsupported_blockers(self, core: CoreObservation) -> list[str]:
+        return sorted(
+            b
+            for b in core.blocker_types()
+            if b not in SUPPORTED_BLOCKERS and b not in HOUSEKEEPING_BLOCKERS
+        )
+
+    def next(
+        self, core: CoreObservation, ledger: TurnLedger
+    ) -> DecisionSpec | EndTurn | Stop:
+        if ledger.decisions >= self.max_decisions_per_turn:
+            return Stop(f"decision_budget_exhausted:{ledger.decisions}")
+
+        deal_players = {d.other_player_id for d in core.pending_deals}
+        for s in sorted(core.diplomacy_sessions, key=lambda s: s.other_player_id):
+            pid = s.other_player_id
+            if _informational(s) or pid in deal_players:
+                continue
+            if s.deal_summary:
+                return Stop(
+                    f"unsupported_session:deal_without_pending_items:player_{pid}"
+                )
+            spec = DecisionSpec(DecisionCategory.DIPLOMACY, f"player:{pid}")
+            if not self._open(ledger, spec):
+                return Stop(f"diplomacy_session_unresolved:player_{pid}")
+            return spec
+
+        for d in sorted(core.pending_deals, key=lambda d: d.other_player_id):
+            spec = DecisionSpec(DecisionCategory.DEAL, f"player:{d.other_player_id}")
+            if not self._open(ledger, spec):
+                return Stop(f"deal_unresolved:player_{d.other_player_id}")
+            return spec
+
+        blockers = core.blocker_types()
+        for blocker, category in (
+            (GOVERNMENT_BLOCKER, DecisionCategory.GOVERNMENT),
+            (POLICY_BLOCKER, DecisionCategory.POLICY),
+            (ENVOY_BLOCKER, DecisionCategory.ENVOY),
+            (PANTHEON_BLOCKER, DecisionCategory.PANTHEON),
+        ):
+            spec = DecisionSpec(category, "empire")
+            if blocker in blockers and self._open(ledger, spec):
+                return spec
+
+        if core.progress.research_type is None:
+            spec = DecisionSpec(DecisionCategory.RESEARCH, "empire")
+            if self._open(ledger, spec):
+                return spec
+        if core.progress.civic_type is None:
+            spec = DecisionSpec(DecisionCategory.CIVIC, "empire")
+            if self._open(ledger, spec):
+                return spec
+
+        for city in sorted(core.cities, key=lambda c: c.city_id):
+            if city.currently_building in EMPTY_QUEUE_STATES:
+                spec = DecisionSpec(DecisionCategory.PRODUCTION, f"city:{city.city_id}")
+                if self._open(ledger, spec):
+                    return spec
+
+        for unit in sorted(core.units, key=lambda u: u.unit_id):
+            if unit.moves_remaining > 0:
+                spec = DecisionSpec(DecisionCategory.UNIT, f"unit:{unit.unit_id}")
+                if self._open(ledger, spec):
+                    return spec
+        return EndTurn()
+
+    def note(
+        self,
+        ledger: TurnLedger,
+        spec: DecisionSpec,
+        kind: ActionKind | None,
+        outcome: ActionOutcome,
+        candidate_id: str | None = None,
+    ) -> None:
+        key = key_for(spec)
+        ledger.decisions += 1
+        ledger.counts[key] += 1
+        if outcome.status not in (OutcomeStatus.CONFIRMED, OutcomeStatus.PENDING):
+            ledger.failures[key] += 1
+            if candidate_id:
+                ledger.failed_candidates.add(candidate_id)
+            if ledger.failures[key] >= self.max_failures_per_key:
+                ledger.resolved.add(key)
+            return
+        if spec.category is DecisionCategory.UNIT:
+            if kind is not ActionKind.MOVE_UNIT:
+                ledger.resolved.add(key)
+        elif spec.category not in (
+            DecisionCategory.DIPLOMACY,
+            DecisionCategory.POLICY,
+            DecisionCategory.ENVOY,
+        ):
+            ledger.resolved.add(key)
+
+    def final_unit_decision(self, ledger: TurnLedger, spec: DecisionSpec) -> bool:
+        """True when this is the unit's last permitted decision this turn.
+
+        The caller then offers only turn-ending orders, so a unit cannot be
+        left awake with moves (which would block the turn) once its budget
+        is spent.
+        """
+        return (
+            spec.category is DecisionCategory.UNIT
+            and ledger.counts[key_for(spec)] >= self.max_unit_decisions - 1
+        )
+
+    def exhaust(self, ledger: TurnLedger, spec: DecisionSpec) -> None:
+        """Nothing left to offer for this key this turn."""
+        ledger.resolved.add(key_for(spec))

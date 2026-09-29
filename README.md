@@ -203,6 +203,10 @@ Civilization VI is a compelling environment for evaluating LLM strategic reasoni
 
 The MCP interface provides a clean abstraction: the model receives narrated game state as text and responds with tool calls. All game rules are enforced by the engine. A companion web app lets you replay sessions turn by turn.
 
+## Decision-only mode (Drex)
+
+`civ-drex` drives the game without a generative model: code enumerates legal candidates, the [Drex](https://nace.ai/drex) decision model picks one, and the controller executes and verifies it. See [docs/drex.md](docs/drex.md).
+
 ## How it works
 
 ```

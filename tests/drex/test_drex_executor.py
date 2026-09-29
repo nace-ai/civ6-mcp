@@ -1,0 +1,320 @@
+"""Executor: typed dispatch, fresh prechecks, verified outcomes, no blind retries."""
+
+import asyncio
+
+import drex_fixtures as fx
+import pytest
+from drex_fakes import FakeGame
+
+from civ_mcp.drex.candidates import (
+    ActionKind,
+    Candidate,
+    DecisionCategory,
+    DecisionPoint,
+    KeepGovernmentParams,
+)
+from civ_mcp.drex.enumerate import (
+    civic_candidates,
+    deal_candidates,
+    diplomacy_candidates,
+    envoy_candidates,
+    government_candidates,
+    pantheon_candidates,
+    policy_candidates,
+    production_candidates,
+    research_candidates,
+    unit_candidates,
+)
+from civ_mcp.drex.executor import Executor, OutcomeStatus, dispatch_call
+
+
+def _cand(cands, kind, pred=lambda c: True):
+    return next(c for c in cands if c.kind is kind and pred(c))
+
+
+def _units(space, unit):
+    return unit_candidates(space, unit, me=fx.ME)[0]
+
+
+def _point(cand, version="v1"):
+    return DecisionPoint.create(
+        decision_id="T5#1",
+        category=DecisionCategory.UNIT,
+        entity="test",
+        observation_version=version,
+        question="q",
+        candidates=[cand],
+        context={},
+    )
+
+
+async def _no_sleep(_):
+    return None
+
+
+def _run(game, cand, version="v1", turn=5, executor=None):
+    ex = executor or Executor(game, sleep=_no_sleep, poll_attempts=2)
+    return asyncio.run(
+        ex.execute(cand, _point(cand), current_version=version, turn=turn)
+    )
+
+
+# Every supported kind -> (GameState method, positional args). unit_index,
+# never the composite unit_id, reaches unit actions.
+DISPATCH_CASES = [
+    (
+        _cand(research_candidates(fx.tech_status()), ActionKind.SET_RESEARCH),
+        ("set_research", ("TECHNOLOGY_POTTERY",)),
+    ),
+    (
+        _cand(civic_candidates(fx.tech_status()), ActionKind.SET_CIVIC),
+        ("set_civic", ("CIVIC_CODE_OF_LAWS",)),
+    ),
+    (
+        _cand(
+            production_candidates(fx.capital(), fx.production_options(), fx.WONDERS)[0],
+            ActionKind.SET_PRODUCTION,
+            lambda c: c.params.item_name == "DISTRICT_ENCAMPMENT",
+        ),
+        (
+            "set_city_production",
+            (fx.CAPITAL_ID, "DISTRICT", "DISTRICT_ENCAMPMENT", 11, 11),
+        ),
+    ),
+    (
+        _cand(
+            _units(fx.warrior_space(), fx.warrior()),
+            ActionKind.MOVE_UNIT,
+            lambda c: c.params.to_x == 11 and c.params.to_y == 12,
+        ),
+        ("move_unit", (fx.WARRIOR_IDX, 11, 12)),
+    ),
+    (
+        _cand(_units(fx.warrior_space(), fx.warrior()), ActionKind.ATTACK),
+        ("attack_unit", (fx.WARRIOR_IDX, 9, 12)),
+    ),
+    (
+        _cand(_units(fx.warrior_space(), fx.warrior()), ActionKind.FORTIFY_UNIT),
+        ("fortify_unit", (fx.WARRIOR_IDX,)),
+    ),
+    (
+        _cand(_units(fx.warrior_space(), fx.warrior()), ActionKind.SKIP_UNIT),
+        ("skip_unit", (fx.WARRIOR_IDX,)),
+    ),
+    (
+        _cand(_units(fx.settler_space(), fx.settler()), ActionKind.FOUND_CITY),
+        ("found_city", (fx.SETTLER_IDX,)),
+    ),
+    (
+        _cand(
+            _units(fx.builder_space(), fx.builder()),
+            ActionKind.IMPROVE_TILE,
+            lambda c: c.params.improvement_type == "IMPROVEMENT_FARM",
+        ),
+        ("improve_tile", (fx.BUILDER_IDX, "IMPROVEMENT_FARM")),
+    ),
+    (
+        _cand(
+            diplomacy_candidates(fx.session()),
+            ActionKind.DIPLOMACY_RESPOND,
+            lambda c: c.params.response == "POSITIVE",
+        ),
+        ("diplomacy_respond", (1, "POSITIVE")),
+    ),
+    (
+        _cand(
+            deal_candidates(fx.deal()),
+            ActionKind.DEAL_RESPOND,
+            lambda c: not c.params.accept,
+        ),
+        ("respond_to_deal", (1, False)),
+    ),
+    (
+        _cand(
+            policy_candidates(fx.policies(), fx.policies().slots[1]),
+            ActionKind.SET_POLICY,
+        ),
+        ("set_policies", ({1: "POLICY_URBAN_PLANNING"},)),
+    ),
+    (
+        _cand(
+            envoy_candidates(fx.envoys()),
+            ActionKind.SEND_ENVOY,
+            lambda c: c.params.city_state_player_id == 20,
+        ),
+        ("send_envoy", (20,)),
+    ),
+    (
+        _cand(
+            government_candidates(fx.governments(), current_type="NONE"),
+            ActionKind.CHANGE_GOVERNMENT,
+        ),
+        ("change_government", ("GOVERNMENT_CHIEFDOM",)),
+    ),
+    (
+        Candidate.create(
+            ActionKind.KEEP_GOVERNMENT, KeepGovernmentParams("NONE"), label="Keep"
+        ),
+        ("keep_current_government", ()),
+    ),
+    (
+        _cand(
+            pantheon_candidates(fx.pantheon()),
+            ActionKind.CHOOSE_PANTHEON,
+            lambda c: "FORGE" in c.params.belief_type,
+        ),
+        ("choose_pantheon", ("BELIEF_GOD_OF_THE_FORGE",)),
+    ),
+]
+
+
+def _wounded_space():
+    space = fx.warrior_space()
+    space.hp, space.can_heal = 40, True
+    return space
+
+
+DISPATCH_CASES.append(
+    (
+        _cand(_units(_wounded_space(), fx.warrior()), ActionKind.HEAL_UNIT),
+        ("heal_unit", (fx.WARRIOR_IDX,)),
+    )
+)
+
+
+@pytest.mark.parametrize(
+    "cand,expected", DISPATCH_CASES, ids=[c.candidate_id for c, _ in DISPATCH_CASES]
+)
+def test_dispatch_table_maps_each_kind_to_intended_call(cand, expected):
+    call = dispatch_call(cand)
+    assert (call.method, call.args) == expected
+
+
+def test_every_action_kind_has_a_dispatch_case():
+    assert {c.kind for c, _ in DISPATCH_CASES} == set(ActionKind)
+
+
+@pytest.mark.parametrize(
+    "cand,expected", DISPATCH_CASES, ids=[c.candidate_id for c, _ in DISPATCH_CASES]
+)
+def test_executor_performs_the_mapped_call_and_confirms_or_acknowledges(cand, expected):
+    game = FakeGame()
+    game.civic = None
+    game.sessions = [fx.session()]
+    game.deals = [fx.deal()]
+    game.extra_blockers = [("ENDTURN_BLOCKING_CONSIDER_GOVERNMENT_CHANGE", "")]
+    if cand.kind is ActionKind.HEAL_UNIT:
+        game.spaces[fx.WARRIOR_IDX] = _wounded_space()
+    outcome = _run(game, cand)
+    assert game.calls == [expected]
+    assert outcome.dispatched is True
+    assert outcome.status in (OutcomeStatus.CONFIRMED, OutcomeStatus.PENDING), outcome
+
+
+def test_stale_decision_is_rejected_without_dispatch():
+    game = FakeGame()
+    cand = research_candidates(fx.tech_status())[0]
+    ex = Executor(game, sleep=_no_sleep)
+    outcome = asyncio.run(
+        ex.execute(cand, _point(cand, "v1"), current_version="v2", turn=5)
+    )
+    assert outcome.status is OutcomeStatus.REJECTED
+    assert outcome.reason == "stale_observation"
+    assert game.calls == []
+
+
+def test_research_is_not_switched_when_already_selected():
+    game = FakeGame()
+    game.research = "TECHNOLOGY_MINING"
+    outcome = _run(game, research_candidates(fx.tech_status())[0])
+    assert outcome.status is OutcomeStatus.REJECTED
+    assert outcome.reason.startswith("precheck:")
+    assert game.calls == []
+
+
+def test_production_never_overwrites_a_non_empty_queue():
+    game = FakeGame()
+    game.cities[fx.CAPITAL_ID].currently_building = "UNIT_WARRIOR"
+    cand = production_candidates(fx.capital(), fx.production_options(), fx.WONDERS)[0][
+        0
+    ]
+    assert _run(game, cand).status is OutcomeStatus.REJECTED
+    assert game.calls == []
+
+
+def test_move_rejected_if_unit_moved_since_observation():
+    game = FakeGame()
+    cand = _cand(_units(fx.warrior_space(), fx.warrior()), ActionKind.MOVE_UNIT)
+    game._set_pos(fx.WARRIOR_IDX, 3, 3, 1.0)
+    assert _run(game, cand).status is OutcomeStatus.REJECTED
+    assert game.calls == []
+
+
+def test_move_rejected_if_index_now_belongs_to_another_unit():
+    game = FakeGame()
+    cand = _cand(_units(fx.warrior_space(), fx.warrior()), ActionKind.MOVE_UNIT)
+    game.spaces[fx.WARRIOR_IDX].unit_id = 999999
+    outcome = _run(game, cand)
+    assert outcome.status is OutcomeStatus.REJECTED
+    assert "identity" in outcome.reason
+
+
+def test_move_with_no_observed_position_change_is_unknown():
+    game = FakeGame()
+    game.ignore.add("move_unit")
+    cand = _cand(_units(fx.warrior_space(), fx.warrior()), ActionKind.MOVE_UNIT)
+    outcome = _run(game, cand)
+    assert outcome.status is OutcomeStatus.UNKNOWN
+    assert len(game.calls) == 1
+
+
+def test_transport_error_after_mutation_is_reconciled_not_retried():
+    game = FakeGame()
+    game.fail["set_research"] = (ConnectionError("socket closed"), True)
+    cand = research_candidates(fx.tech_status())[0]
+    outcome = _run(game, cand)
+    assert outcome.status is OutcomeStatus.CONFIRMED
+    assert outcome.reconciled is True
+    assert [m for m, _ in game.calls] == ["set_research"]
+
+
+def test_transport_error_before_mutation_is_unknown_and_never_redispatched():
+    game = FakeGame()
+    game.fail["set_research"] = (ConnectionError("socket closed"), False)
+    game.ignore.add("set_research")
+    cand = research_candidates(fx.tech_status())[0]
+    ex = Executor(game, sleep=_no_sleep, poll_attempts=1)
+    first = _run(game, cand, executor=ex)
+    assert first.status is OutcomeStatus.UNKNOWN and first.reconciled
+    second = _run(game, cand, executor=ex)
+    assert second.status is OutcomeStatus.REJECTED
+    assert second.reason == "already_dispatched_this_turn"
+    assert [m for m, _ in game.calls] == ["set_research"]
+
+
+def test_same_attack_is_not_dispatched_twice_in_a_turn():
+    game = FakeGame()
+    cand = _cand(_units(fx.warrior_space(), fx.warrior()), ActionKind.ATTACK)
+    ex = Executor(game, sleep=_no_sleep)
+    _run(game, cand, executor=ex)
+    game.spaces[fx.WARRIOR_IDX] = fx.warrior_space()
+    game._set_pos(fx.WARRIOR_IDX, 10, 12, 2.0)
+    game.spaces[fx.WARRIOR_IDX].targets = fx.warrior_space().targets
+    again = _run(game, cand, executor=ex)
+    assert again.reason == "already_dispatched_this_turn"
+    assert [m for m, _ in game.calls] == ["attack_unit"]
+
+
+def test_fortify_is_pending_until_fortification_is_observed():
+    game = FakeGame()
+    cand = _cand(_units(fx.warrior_space(), fx.warrior()), ActionKind.FORTIFY_UNIT)
+    outcome = _run(game, cand)
+    assert outcome.status is OutcomeStatus.PENDING
+
+
+def test_outcome_record_is_serializable():
+    import json
+
+    game = FakeGame()
+    outcome = _run(game, research_candidates(fx.tech_status())[0])
+    json.dumps(outcome.to_record())

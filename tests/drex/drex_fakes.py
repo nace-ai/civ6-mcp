@@ -1,0 +1,333 @@
+"""In-memory stand-in for GameState used by executor/scheduler/runner tests.
+
+Implements the GameState methods the Drex controller calls, applies the same
+kind of state change the engine would, and records every call. Failures can
+be injected before or after a mutation is applied.
+"""
+
+import copy
+
+import drex_fixtures as fx
+
+from civ_mcp import lua as lq
+
+
+class FakeGame:
+    def __init__(self):
+        self.calls: list[tuple[str, tuple]] = []
+        self.turn = 5
+        self.civ, self.seed = "rome", 42
+        self.research: str | None = None
+        self.civic: str | None = "CIVIC_CODE_OF_LAWS"
+        self.gold = 35.0
+        self.cities = {fx.CAPITAL_ID: fx.capital()}
+        self.production = {fx.CAPITAL_ID: fx.production_options()}
+        self.units = {
+            fx.WARRIOR_ID: fx.warrior(),
+            fx.SETTLER_ID: fx.settler(),
+            fx.BUILDER_ID: fx.builder(),
+        }
+        self.spaces = {
+            fx.WARRIOR_IDX: fx.warrior_space(),
+            fx.SETTLER_IDX: fx.settler_space(),
+            fx.BUILDER_IDX: fx.builder_space(),
+        }
+        self.fortify = {}
+        self.improvements: dict[tuple[int, int], str] = {}
+        self.founded: set[tuple[int, int]] = set()
+        self.sessions: list[lq.DiplomacySession] = []
+        self.deals: list[lq.PendingDeal] = []
+        self.policy_status = fx.policies()
+        self.envoy_status = fx.envoys()
+        self.govs = fx.governments()
+        self.current_gov = "NONE"
+        self.pantheon_status = fx.pantheon()
+        self.extra_blockers: list[tuple[str, str]] = []
+        self.fail: dict[str, tuple[Exception, bool]] = {}
+        self.ignore: set[str] = set()
+        self.end_turn_calls = 0
+
+    # ---------------------------------------------------------------- helpers
+    def _record(self, method, *args):
+        self.calls.append((method, args))
+        fail = self.fail.pop(method, None)
+        if fail and not fail[1]:
+            raise fail[0]
+        return fail
+
+    def _after(self, fail):
+        if fail and fail[1]:
+            raise fail[0]
+
+    def _by_index(self, idx):
+        return next((u for u in self.units.values() if u.unit_index == idx), None)
+
+    def _set_pos(self, idx, x, y, moves):
+        u = self._by_index(idx)
+        u.x, u.y, u.moves_remaining = x, y, moves
+        space = self.spaces[idx]
+        space.x, space.y, space.moves_remaining = x, y, moves
+        if moves <= 0:
+            space.reachable, space.targets = [], []
+
+    # ---------------------------------------------------------------- queries
+    async def get_game_identity(self):
+        return (self.civ, self.seed)
+
+    async def get_game_overview(self):
+        research = "None"
+        if self.research:
+            research = next(
+                t.name
+                for t in fx.tech_status().available_techs
+                if t.tech_type == self.research
+            )
+        ov = fx.overview(turn=self.turn, research=research)
+        ov.gold = self.gold
+        ov.num_units = len(self.units)
+        ov.num_cities = len(self.cities)
+        return ov
+
+    async def get_tech_civics(self):
+        status = fx.tech_status()
+        if self.research:
+            status.current_research = self.research
+        if self.civic is None:
+            status.current_civic = "None"
+        return status
+
+    async def get_progress_types(self):
+        return lq.ProgressTypes(self.research, self.civic)
+
+    async def check_eligibility(self, kind, type_name):
+        pool = fx.tech_status()
+        types = (
+            {t.tech_type for t in pool.available_techs}
+            if kind == "tech"
+            else {c.civic_type for c in pool.available_civics}
+        )
+        return (type_name in types, "engine")
+
+    async def get_cities(self):
+        return [copy.deepcopy(c) for c in self.cities.values()], []
+
+    async def list_city_production(self, city_id):
+        return copy.deepcopy(self.production.get(city_id, []))
+
+    async def get_wonder_types(self):
+        return set(fx.WONDERS)
+
+    async def get_units(self):
+        return [copy.deepcopy(u) for u in self.units.values()]
+
+    async def get_unit_action_space(self, unit_index):
+        return copy.deepcopy(self.spaces.get(unit_index))
+
+    async def get_unit_state(self, unit_index):
+        u = self._by_index(unit_index)
+        if u is None:
+            return None
+        return lq.UnitState(
+            u.x,
+            u.y,
+            u.moves_remaining,
+            self.fortify.get(u.unit_id, 0),
+            u.health,
+            u.build_charges,
+        )
+
+    async def get_map_area(self, x, y, radius=2):
+        tiles = []
+        for tx in range(x - radius, x + radius + 1):
+            for ty in range(y - radius, y + radius + 1):
+                tiles.append(
+                    lq.TileInfo(
+                        x=tx,
+                        y=ty,
+                        terrain="TERRAIN_GRASS",
+                        feature=None,
+                        resource=None,
+                        is_hills=False,
+                        is_river=False,
+                        is_coastal=False,
+                        improvement=self.improvements.get((tx, ty)),
+                        owner_id=0,
+                    )
+                )
+        return tiles
+
+    async def verify_production(self, city_id, item_name):
+        return self.cities[city_id].currently_building == item_name
+
+    async def city_exists_at(self, x, y):
+        return (x, y) in self.founded
+
+    async def get_diplomacy_sessions(self):
+        return copy.deepcopy(self.sessions)
+
+    async def get_pending_deals(self):
+        return copy.deepcopy(self.deals)
+
+    async def get_policies(self):
+        status = copy.deepcopy(self.policy_status)
+        status.government_type = self.current_gov
+        return status
+
+    async def get_city_states(self):
+        return copy.deepcopy(self.envoy_status)
+
+    async def get_available_governments(self):
+        govs = copy.deepcopy(self.govs)
+        for g in govs:
+            g.is_current = g.government_type == self.current_gov
+        return govs
+
+    async def get_pantheon_status(self):
+        return copy.deepcopy(self.pantheon_status)
+
+    async def get_end_turn_blockers(self):
+        blockers = list(self.extra_blockers)
+        if self.research is None:
+            blockers.append(("ENDTURN_BLOCKING_RESEARCH", "Choose research"))
+        if self.civic is None:
+            blockers.append(("ENDTURN_BLOCKING_CIVIC", "Choose civic"))
+        for c in self.cities.values():
+            if c.currently_building in ("nothing", "NONE"):
+                blockers.append(("ENDTURN_BLOCKING_PRODUCTION", "Choose production"))
+                break
+        if any(u.moves_remaining > 0 for u in self.units.values()):
+            blockers.append(("ENDTURN_BLOCKING_UNITS", "Units need orders"))
+        return blockers
+
+    # ---------------------------------------------------------------- actions
+    async def set_research(self, tech):
+        fail = self._record("set_research", tech)
+        if "set_research" not in self.ignore:
+            self.research = tech
+        self._after(fail)
+        return f"RESEARCHING|{tech}"
+
+    async def set_civic(self, civic):
+        fail = self._record("set_civic", civic)
+        self.civic = civic
+        self._after(fail)
+        return f"PROGRESSING|{civic}"
+
+    async def set_city_production(
+        self, city_id, item_type, item_name, target_x=None, target_y=None
+    ):
+        fail = self._record(
+            "set_city_production", city_id, item_type, item_name, target_x, target_y
+        )
+        self.cities[city_id].currently_building = item_name
+        self._after(fail)
+        return f"PRODUCING|{item_name}|8 turns"
+
+    async def move_unit(self, unit_index, x, y):
+        fail = self._record("move_unit", unit_index, x, y)
+        if "move_unit" not in self.ignore:
+            self._set_pos(unit_index, x, y, 0.0)
+        self._after(fail)
+        return f"MOVING_TO|{x},{y}|from:0,0"
+
+    async def attack_unit(self, unit_index, x, y):
+        fail = self._record("attack_unit", unit_index, x, y)
+        u = self._by_index(unit_index)
+        self._set_pos(unit_index, u.x, u.y, 0.0)
+        self._after(fail)
+        return f"MELEE_ATTACK|target:UNIT_WARRIOR at ({x},{y})"
+
+    async def found_city(self, unit_index):
+        fail = self._record("found_city", unit_index)
+        u = self._by_index(unit_index)
+        self.founded.add((u.x, u.y))
+        del self.units[u.unit_id]
+        del self.spaces[unit_index]
+        self._after(fail)
+        return f"FOUNDED|{u.x},{u.y}"
+
+    async def improve_tile(self, unit_index, improvement):
+        fail = self._record("improve_tile", unit_index, improvement)
+        u = self._by_index(unit_index)
+        self.improvements[(u.x, u.y)] = improvement
+        u.build_charges -= 1
+        self._set_pos(unit_index, u.x, u.y, 0.0)
+        self._after(fail)
+        return f"IMPROVING|{improvement}|{u.x},{u.y}"
+
+    async def fortify_unit(self, unit_index):
+        fail = self._record("fortify_unit", unit_index)
+        u = self._by_index(unit_index)
+        self._set_pos(unit_index, u.x, u.y, 0.0)
+        self._after(fail)
+        return "FORTIFIED"
+
+    async def heal_unit(self, unit_index):
+        fail = self._record("heal_unit", unit_index)
+        u = self._by_index(unit_index)
+        self._set_pos(unit_index, u.x, u.y, 0.0)
+        self._after(fail)
+        return "HEALING|HP:50/100"
+
+    async def skip_unit(self, unit_index):
+        fail = self._record("skip_unit", unit_index)
+        u = self._by_index(unit_index)
+        self._set_pos(unit_index, u.x, u.y, 0.0)
+        self._after(fail)
+        return "SKIPPED"
+
+    async def diplomacy_respond(self, other_player_id, response):
+        fail = self._record("diplomacy_respond", other_player_id, response)
+        self.sessions = [
+            s for s in self.sessions if s.other_player_id != other_player_id
+        ]
+        self._after(fail)
+        return f"OK:RESPONDED|{response}|SESSION_CLOSED"
+
+    async def respond_to_deal(self, other_player_id, accept):
+        fail = self._record("respond_to_deal", other_player_id, accept)
+        self.deals = [d for d in self.deals if d.other_player_id != other_player_id]
+        self._after(fail)
+        return "DEAL_ACCEPTED|Egypt" if accept else "DEAL_REJECTED|Egypt"
+
+    async def set_policies(self, assignments):
+        fail = self._record("set_policies", assignments)
+        for slot in self.policy_status.slots:
+            if slot.slot_index in assignments:
+                slot.current_policy = assignments[slot.slot_index]
+        self._after(fail)
+        return "POLICIES_SET|Policies updated."
+
+    async def send_envoy(self, city_state_player_id):
+        fail = self._record("send_envoy", city_state_player_id)
+        self.envoy_status.tokens_available -= 1
+        self._after(fail)
+        return "ENVOY_SENT|Kabul"
+
+    async def change_government(self, government_type):
+        fail = self._record("change_government", government_type)
+        self.current_gov = government_type
+        self.extra_blockers = [
+            b
+            for b in self.extra_blockers
+            if b[0] != "ENDTURN_BLOCKING_CONSIDER_GOVERNMENT_CHANGE"
+        ]
+        self._after(fail)
+        return f"GOVERNMENT_CHANGED|{government_type}|Chiefdom"
+
+    async def keep_current_government(self):
+        fail = self._record("keep_current_government")
+        self.extra_blockers = [
+            b
+            for b in self.extra_blockers
+            if b[0] != "ENDTURN_BLOCKING_CONSIDER_GOVERNMENT_CHANGE"
+        ]
+        self._after(fail)
+        return "GOVERNMENT_CHANGE_CONSIDERED"
+
+    async def choose_pantheon(self, belief_type):
+        fail = self._record("choose_pantheon", belief_type)
+        self.pantheon_status.has_pantheon = True
+        self.pantheon_status.current_belief = belief_type
+        self._after(fail)
+        return f"PANTHEON_FOUNDED|{belief_type}"

@@ -1,0 +1,20 @@
+{
+  "_note": "SYNTHETIC response in the documented /v1/systemone wire format. Not produced by Drex.",
+  "model": "drex-synthetic-example",
+  "answers": {
+    "decision": {
+      "type": "choice",
+      "choice": "Mining",
+      "probabilities": {
+        "Pottery": 0.21,
+        "Mining": 0.64,
+        "Animal Husbandry": 0.15
+      },
+      "confidence": 0.33
+    }
+  },
+  "usage": {
+    "input_tokens": 0,
+    "output_tokens": 0
+  }
+}

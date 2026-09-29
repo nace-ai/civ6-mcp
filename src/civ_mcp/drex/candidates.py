@@ -1,0 +1,378 @@
+"""Typed candidate actions and decision points.
+
+A candidate's ``candidate_id`` is derived from its action content, so the same
+legal action keeps the same identity regardless of enumeration order. The
+``label`` and ``facts`` are what the model sees; ``kind`` + ``params`` are what
+the executor dispatches.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+from collections import Counter
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from enum import StrEnum
+from typing import Any
+
+
+class DecisionCategory(StrEnum):
+    RESEARCH = "research"
+    CIVIC = "civic"
+    PRODUCTION = "production"
+    UNIT = "unit"
+    DIPLOMACY = "diplomacy"
+    DEAL = "deal"
+    POLICY = "policy"
+    ENVOY = "envoy"
+    GOVERNMENT = "government"
+    PANTHEON = "pantheon"
+
+
+class ActionKind(StrEnum):
+    SET_RESEARCH = "set_research"
+    SET_CIVIC = "set_civic"
+    SET_PRODUCTION = "set_production"
+    MOVE_UNIT = "move_unit"
+    ATTACK = "attack"
+    FOUND_CITY = "found_city"
+    IMPROVE_TILE = "improve_tile"
+    FORTIFY_UNIT = "fortify_unit"
+    HEAL_UNIT = "heal_unit"
+    SKIP_UNIT = "skip_unit"
+    DIPLOMACY_RESPOND = "diplomacy_respond"
+    DEAL_RESPOND = "deal_respond"
+    SET_POLICY = "set_policy"
+    SEND_ENVOY = "send_envoy"
+    CHANGE_GOVERNMENT = "change_government"
+    KEEP_GOVERNMENT = "keep_government"
+    CHOOSE_PANTHEON = "choose_pantheon"
+
+
+@dataclass(frozen=True)
+class UnitRef:
+    """Identity and position of the acting unit when the candidate was built.
+
+    ``unit_id`` is the composite ID (owner * 65536 + index); most GameState
+    unit actions take ``unit_index``.
+    """
+
+    unit_id: int
+    unit_index: int
+    unit_type: str
+    x: int
+    y: int
+
+
+@dataclass(frozen=True)
+class ResearchParams:
+    tech_type: str
+
+
+@dataclass(frozen=True)
+class CivicParams:
+    civic_type: str
+
+
+@dataclass(frozen=True)
+class ProductionParams:
+    city_id: int
+    item_type: str  # UNIT / BUILDING / DISTRICT / PROJECT
+    item_name: str
+    target_x: int | None = None
+    target_y: int | None = None
+
+
+@dataclass(frozen=True)
+class MoveParams:
+    unit: UnitRef
+    to_x: int
+    to_y: int
+
+
+@dataclass(frozen=True)
+class AttackParams:
+    unit: UnitRef
+    target_x: int
+    target_y: int
+    attack_type: str  # MELEE / RANGED
+    target_unit_type: str
+    target_owner_id: int
+
+
+@dataclass(frozen=True)
+class UnitOrderParams:
+    unit: UnitRef
+
+
+@dataclass(frozen=True)
+class ImproveParams:
+    unit: UnitRef
+    improvement_type: str
+
+
+@dataclass(frozen=True)
+class DiplomacyParams:
+    other_player_id: int
+    response: str  # POSITIVE / NEGATIVE
+
+
+@dataclass(frozen=True)
+class DealParams:
+    other_player_id: int
+    accept: bool
+
+
+@dataclass(frozen=True)
+class PolicyParams:
+    slot_index: int
+    policy_type: str
+
+
+@dataclass(frozen=True)
+class EnvoyParams:
+    city_state_player_id: int
+
+
+@dataclass(frozen=True)
+class GovernmentParams:
+    government_type: str
+
+
+@dataclass(frozen=True)
+class KeepGovernmentParams:
+    current_government_type: str
+
+
+@dataclass(frozen=True)
+class PantheonParams:
+    belief_type: str
+
+
+ActionParams = (
+    ResearchParams
+    | CivicParams
+    | ProductionParams
+    | MoveParams
+    | AttackParams
+    | UnitOrderParams
+    | ImproveParams
+    | DiplomacyParams
+    | DealParams
+    | PolicyParams
+    | EnvoyParams
+    | GovernmentParams
+    | KeepGovernmentParams
+    | PantheonParams
+)
+
+PARAMS_FOR_KIND: dict[ActionKind, type] = {
+    ActionKind.SET_RESEARCH: ResearchParams,
+    ActionKind.SET_CIVIC: CivicParams,
+    ActionKind.SET_PRODUCTION: ProductionParams,
+    ActionKind.MOVE_UNIT: MoveParams,
+    ActionKind.ATTACK: AttackParams,
+    ActionKind.FOUND_CITY: UnitOrderParams,
+    ActionKind.IMPROVE_TILE: ImproveParams,
+    ActionKind.FORTIFY_UNIT: UnitOrderParams,
+    ActionKind.HEAL_UNIT: UnitOrderParams,
+    ActionKind.SKIP_UNIT: UnitOrderParams,
+    ActionKind.DIPLOMACY_RESPOND: DiplomacyParams,
+    ActionKind.DEAL_RESPOND: DealParams,
+    ActionKind.SET_POLICY: PolicyParams,
+    ActionKind.SEND_ENVOY: EnvoyParams,
+    ActionKind.CHANGE_GOVERNMENT: GovernmentParams,
+    ActionKind.KEEP_GOVERNMENT: KeepGovernmentParams,
+    ActionKind.CHOOSE_PANTHEON: PantheonParams,
+}
+
+
+def candidate_id_for(kind: ActionKind, params: ActionParams) -> str:
+    """Stable identity derived from the action's executable content."""
+    match kind, params:
+        case ActionKind.SET_RESEARCH, ResearchParams(tech_type=t):
+            return f"research:{t}"
+        case ActionKind.SET_CIVIC, CivicParams(civic_type=c):
+            return f"civic:{c}"
+        case ActionKind.SET_PRODUCTION, ProductionParams() as p:
+            at = "" if p.target_x is None else f"@{p.target_x},{p.target_y}"
+            return f"produce:{p.city_id}:{p.item_type}:{p.item_name}{at}"
+        case ActionKind.MOVE_UNIT, MoveParams(unit=u, to_x=x, to_y=y):
+            return f"move:{u.unit_id}:{x},{y}"
+        case ActionKind.ATTACK, AttackParams(unit=u, target_x=x, target_y=y):
+            return f"attack:{u.unit_id}:{x},{y}"
+        case ActionKind.IMPROVE_TILE, ImproveParams(unit=u, improvement_type=i):
+            return f"improve:{u.unit_id}:{i}"
+        case (
+            (
+                ActionKind.FOUND_CITY
+                | ActionKind.FORTIFY_UNIT
+                | ActionKind.HEAL_UNIT
+                | ActionKind.SKIP_UNIT
+            ),
+            UnitOrderParams(unit=u),
+        ):
+            prefix = {
+                ActionKind.FOUND_CITY: "found",
+                ActionKind.FORTIFY_UNIT: "fortify",
+                ActionKind.HEAL_UNIT: "heal",
+                ActionKind.SKIP_UNIT: "skip",
+            }[kind]
+            return f"{prefix}:{u.unit_id}"
+        case ActionKind.DIPLOMACY_RESPOND, DiplomacyParams(
+            other_player_id=p, response=r
+        ):
+            return f"diplomacy:{p}:{r}"
+        case ActionKind.DEAL_RESPOND, DealParams(other_player_id=p, accept=a):
+            return f"deal:{p}:{'accept' if a else 'reject'}"
+        case ActionKind.SET_POLICY, PolicyParams(slot_index=s, policy_type=t):
+            return f"policy:{s}:{t}"
+        case ActionKind.SEND_ENVOY, EnvoyParams(city_state_player_id=p):
+            return f"envoy:{p}"
+        case ActionKind.CHANGE_GOVERNMENT, GovernmentParams(government_type=g):
+            return f"government:{g}"
+        case ActionKind.KEEP_GOVERNMENT, KeepGovernmentParams():
+            return "government:keep"
+        case ActionKind.CHOOSE_PANTHEON, PantheonParams(belief_type=b):
+            return f"pantheon:{b}"
+    raise TypeError(f"{kind} does not accept {type(params).__name__}")
+
+
+@dataclass(frozen=True)
+class Candidate:
+    candidate_id: str
+    kind: ActionKind
+    params: ActionParams
+    label: str
+    facts: Mapping[str, Any] = field(default_factory=dict, compare=False, hash=False)
+
+    @classmethod
+    def create(
+        cls,
+        kind: ActionKind,
+        params: ActionParams,
+        *,
+        label: str,
+        facts: Mapping[str, Any] | None = None,
+    ) -> Candidate:
+        expected = PARAMS_FOR_KIND[kind]
+        if not isinstance(params, expected):
+            raise TypeError(
+                f"{kind} requires {expected.__name__}, got {type(params).__name__}"
+            )
+        if not label:
+            raise ValueError("candidate label must be non-empty")
+        return cls(
+            candidate_id=candidate_id_for(kind, params),
+            kind=kind,
+            params=params,
+            label=label,
+            facts=dict(facts or {}),
+        )
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "id": self.candidate_id,
+            "kind": str(self.kind),
+            "params": dataclasses.asdict(self.params),
+            "label": self.label,
+            "facts": dict(self.facts),
+        }
+
+
+@dataclass(frozen=True)
+class Exclusion:
+    """An option the controller did not offer, with the reason."""
+
+    option: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class DecisionPoint:
+    """One choice presented to the selector, fixed to an observation version.
+
+    Candidates are stored in canonical ``candidate_id`` order and labels are
+    made unique in that order, so neither depends on enumeration order.
+    """
+
+    decision_id: str
+    category: DecisionCategory
+    entity: str
+    observation_version: str
+    question: str
+    candidates: tuple[Candidate, ...]
+    context: Mapping[str, Any] = field(default_factory=dict, compare=False, hash=False)
+    exclusions: tuple[Exclusion, ...] = ()
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        decision_id: str,
+        category: DecisionCategory,
+        entity: str,
+        observation_version: str,
+        question: str,
+        candidates: list[Candidate] | tuple[Candidate, ...],
+        context: Mapping[str, Any],
+        exclusions: list[Exclusion] | tuple[Exclusion, ...] = (),
+    ) -> DecisionPoint:
+        if not candidates:
+            raise ValueError(f"decision {decision_id} has no candidates")
+        ordered = sorted(candidates, key=lambda c: c.candidate_id)
+        ids = [c.candidate_id for c in ordered]
+        dupes = sorted(i for i, n in Counter(ids).items() if n > 1)
+        if dupes:
+            raise ValueError(f"duplicate candidate ids: {dupes}")
+        return cls(
+            decision_id=decision_id,
+            category=category,
+            entity=entity,
+            observation_version=observation_version,
+            question=question,
+            candidates=tuple(_unique_labels(ordered)),
+            context=dict(context),
+            exclusions=tuple(exclusions),
+        )
+
+    @property
+    def label_to_id(self) -> dict[str, str]:
+        return {c.label: c.candidate_id for c in self.candidates}
+
+    def get(self, candidate_id: str) -> Candidate | None:
+        for c in self.candidates:
+            if c.candidate_id == candidate_id:
+                return c
+        return None
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "decision_id": self.decision_id,
+            "category": str(self.category),
+            "entity": self.entity,
+            "observation_version": self.observation_version,
+            "question": self.question,
+            "candidates": [c.to_record() for c in self.candidates],
+            "exclusions": [dataclasses.asdict(e) for e in self.exclusions],
+        }
+
+
+def _unique_labels(ordered: list[Candidate]) -> list[Candidate]:
+    totals = Counter(c.label for c in ordered)
+    seen: Counter[str] = Counter()
+    taken = {c.label for c in ordered if totals[c.label] == 1}
+    out: list[Candidate] = []
+    for c in ordered:
+        if totals[c.label] == 1:
+            out.append(c)
+            continue
+        seen[c.label] += 1
+        n = seen[c.label]
+        label = f"{c.label} [{n}]"
+        while label in taken:
+            n += 1
+            label = f"{c.label} [{n}]"
+        taken.add(label)
+        out.append(dataclasses.replace(c, label=label))
+    return out

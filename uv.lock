@@ -486,11 +486,12 @@ wheels = [
 
 [[package]]
 name = "civ6-mcp"
-version = "1.1.8"
+version = "1.1.11"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
     { name = "fastapi", extra = ["standard"] },
+    { name = "httpx" },
     { name = "mcp" },
 ]
 
@@ -559,6 +560,7 @@ requires-dist = [
     { name = "fsspec", marker = "extra == 'publish'", specifier = ">=2024.6" },
     { name = "google-cloud-aiplatform", marker = "extra == 'evals'", specifier = ">=1.38" },
     { name = "google-genai", marker = "extra == 'evals'", specifier = ">=1.69" },
+    { name = "httpx", specifier = ">=0.28" },
     { name = "httpx", marker = "extra == 'publish'", specifier = ">=0.28" },
     { name = "huggingface-hub", marker = "extra == 'publish'", specifier = ">=1.13" },
     { name = "inspect-ai", marker = "extra == 'evals'", specifier = ">=0.3.203" },

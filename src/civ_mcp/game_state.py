@@ -62,6 +62,12 @@ class GameState:
         # One-shot warning from the most recent advisor call, consumed and
         # cleared by the server wrapper.
         self._advisor_budget_warning: str | None = None
+        # Opt-in: end_turn surfaces consequential blockers (captured cities,
+        # World Congress passes, promotions, government prompts, spy escapes)
+        # instead of auto-resolving them. MCP behavior is unchanged when False.
+        self.decision_only_end_turn: bool = False
+        # Informational/housekeeping actions end_turn performed, for logging.
+        self.end_turn_housekeeping: list[dict] = []
 
     async def get_game_identity(self) -> tuple[str, int]:
         """Return (civ_type_lower, random_seed) for the current game.
@@ -1659,6 +1665,54 @@ class GameState:
                 lines.append(f"  - {n.message}")
 
         return "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    # Typed legality / postcondition queries (decision-only controller)
+    # ------------------------------------------------------------------
+
+    async def get_unit_action_space(self, unit_index: int) -> lq.UnitActionSpace | None:
+        lines = await self.conn.execute_write(
+            lq.build_unit_action_space_query(unit_index)
+        )
+        return lq.parse_unit_action_space(lines)
+
+    async def get_unit_state(self, unit_index: int) -> lq.UnitState | None:
+        lines = await self.conn.execute_read(lq.build_unit_state_query(unit_index))
+        return lq.parse_unit_state(lines)
+
+    async def get_progress_types(self) -> lq.ProgressTypes:
+        lines = await self.conn.execute_read(lq.build_progress_types_query())
+        return lq.parse_progress_types(lines)
+
+    async def check_eligibility(self, kind: str, type_name: str) -> tuple[bool, str]:
+        lines = await self.conn.execute_read(lq.build_eligibility_query(kind, type_name))
+        return lq.parse_eligibility(lines)
+
+    async def get_wonder_types(self) -> set[str]:
+        lines = await self.conn.execute_read(lq.build_wonder_types_query())
+        return lq.parse_wonder_types(lines)
+
+    async def get_available_governments(self) -> list[lq.GovernmentOption]:
+        lines = await self.conn.execute_write(lq.build_available_governments_query())
+        return lq.parse_available_governments(lines)
+
+    async def keep_current_government(self) -> str:
+        lines = await self.conn.execute_write(lq.build_government_change_considered())
+        return _action_result(lines)
+
+    async def get_end_turn_blockers(self) -> list[tuple[str, str]]:
+        lines = await self.conn.execute_write(lq.build_end_turn_blocking_query())
+        return lq.parse_end_turn_blocking(lines)
+
+    async def verify_production(self, city_id: int, item_name: str) -> bool:
+        lines = await self.conn.execute_read(
+            lq.build_verify_production(city_id, item_name)
+        )
+        return any(line.startswith("CONFIRMED") for line in lines)
+
+    async def city_exists_at(self, x: int, y: int) -> bool:
+        lines = await self.conn.execute_read(lq.build_verify_city_at(x, y))
+        return lq.parse_verify_city_at(lines)
 
     # ------------------------------------------------------------------
     # Turn management

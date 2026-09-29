@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import civ_mcp.narrate as nr
@@ -15,6 +16,43 @@ if TYPE_CHECKING:
     from civ_mcp.game_state import GameState
 
 log = logging.getLogger(__name__)
+
+
+def _decision_only(gs: GameState) -> bool:
+    return bool(getattr(gs, "decision_only_end_turn", False))
+
+
+# Blockers whose auto-resolution below makes a gameplay choice (keep a city,
+# pass on Congress, skip a governor/government decision, pick a spy route,
+# clear stored promotions, dismiss a production prompt).
+_CONSEQUENTIAL_BLOCKERS = frozenset(
+    {
+        "ENDTURN_BLOCKING_GOVERNOR_IDLE",
+        "ENDTURN_BLOCKING_CONSIDER_GOVERNMENT_CHANGE",
+        "ENDTURN_BLOCKING_CONSIDER_DISLOYAL_CITY",
+        "ENDTURN_BLOCKING_CONSIDER_RAZE_CITY",
+        "ENDTURN_BLOCKING_UNIT_PROMOTION",
+        "ENDTURN_BLOCKING_SPY_CHOOSE_ESCAPE_ROUTE",
+        "ENDTURN_BLOCKING_PRODUCTION",
+    }
+)
+
+
+def _is_consequential(blocking_type: str) -> bool:
+    if blocking_type in _CONSEQUENTIAL_BLOCKERS:
+        return True
+    return (
+        "WORLD_CONGRESS" in blocking_type
+        and blocking_type != "ENDTURN_BLOCKING_WORLD_CONGRESS_LOOK"
+    )
+
+
+def _housekeeping(gs: GameState, action: str, detail: str = "") -> None:
+    """Record an informational/non-gameplay action end_turn performed."""
+    log.info("End-turn housekeeping: %s %s", action, detail)
+    records = getattr(gs, "end_turn_housekeeping", None)
+    if records is not None:
+        records.append({"action": action, "detail": detail})
 
 
 async def _check_mid_turn_diplomacy(
@@ -52,10 +90,7 @@ async def _check_mid_turn_diplomacy(
                 close_lua = lq.build_diplomacy_respond(ws.other_player_id, "EXIT")
                 await gs.conn.execute_write(close_lua)
                 war_names.append(f"{ws.other_civ_name} ({ws.other_leader_name})")
-                log.info(
-                    "Auto-dismissed war declaration from %s",
-                    ws.other_civ_name,
-                )
+                _housekeeping(gs, "war_declaration_dismissed", ws.other_civ_name)
             # Remove war sessions from the list
             mid_sessions = [s for s in mid_sessions if not s.is_at_war]
             # If only war sessions, resume polling (original ACTION_ENDTURN
@@ -550,7 +585,7 @@ async def execute_end_turn(gs: GameState) -> str:
     try:
         pre_dismiss = await gs.dismiss_popup()
         if "Dismissed" in pre_dismiss:
-            log.info("Pre-turn popup dismissed: %s", pre_dismiss)
+            _housekeeping(gs, "popup_dismissed_pre_turn", pre_dismiss)
     except Exception:
         log.debug("Pre-turn dismiss failed", exc_info=True)
 
@@ -564,7 +599,7 @@ async def execute_end_turn(gs: GameState) -> str:
             n_res = len(wc_status.resolutions) if wc_status.resolutions else 0
             # Skip gate when WC fires with 0 resolutions — nothing to vote on
             if n_res == 0 and not wc_status.is_in_session:
-                log.info("WC fires this turn with 0 resolutions — auto-proceeding")
+                _housekeeping(gs, "world_congress_no_resolutions")
             else:
                 handler_lines = await gs.conn.execute_write(
                     f'print(__civmcp_wc_handler and "HANDLER_SET" or "NO_HANDLER"); '
@@ -596,6 +631,10 @@ async def execute_end_turn(gs: GameState) -> str:
             hard_blockers: list[tuple[str, str]] = []
 
             for blocking_type, blocking_msg in blockers:
+                if _decision_only(gs) and _is_consequential(blocking_type):
+                    hard_blockers.append((blocking_type, blocking_msg))
+                    continue
+
                 # --- Auto-resolvable soft blockers ---
 
                 if blocking_type == "ENDTURN_BLOCKING_GOVERNOR_IDLE":
@@ -652,6 +691,7 @@ async def execute_end_turn(gs: GameState) -> str:
                         f"if p then p:SetHide(true) end; "
                         f'print("OK"); print("{lq.SENTINEL}")'
                     )
+                    _housekeeping(gs, "world_congress_look_dismissed")
                     resolved_any = True
                     continue
 
@@ -747,6 +787,7 @@ async def execute_end_turn(gs: GameState) -> str:
                             f'print("{lq.SENTINEL}")'
                         )
                         if any("AUTO_RESOLVED" in l for l in envoy_lines):
+                            _housekeeping(gs, "envoy_prompt_cleared_no_tokens")
                             resolved_any = True
                             continue
                     except Exception:
@@ -887,6 +928,9 @@ async def execute_end_turn(gs: GameState) -> str:
                         )
                         result_lines = await gs.conn.execute_write(dismiss_lua)
                         if any("AUTO_CLEARED" in l for l in result_lines):
+                            _housekeeping(
+                                gs, "stale_choice_notification_cleared", blocking_type
+                            )
                             resolved_any = True
                             continue
                     except Exception:
@@ -1022,6 +1066,7 @@ async def execute_end_turn(gs: GameState) -> str:
                         )
                         skip_lines = await gs.conn.execute_read(check_lua)
                         if any("AUTO_SKIPPED" in l for l in skip_lines):
+                            _housekeeping(gs, "zero_move_units_finished")
                             resolved_any = True
                             continue
                     except Exception:
@@ -1298,7 +1343,7 @@ async def execute_end_turn(gs: GameState) -> str:
         try:
             dismissed = await gs.dismiss_popup()
             if "Dismissed" in dismissed:
-                log.info("Post-timeout popup dismissed: %s", dismissed)
+                _housekeeping(gs, "popup_dismissed_after_timeout", dismissed)
                 await gs.conn.execute_write(lua)
                 for _ in range(5):
                     await asyncio.sleep(2.0)
@@ -1467,6 +1512,7 @@ async def execute_end_turn(gs: GameState) -> str:
     if turn_after is not None and saves_work_on_this_platform():
         try:
             await save_game(gs.conn, f"0_MCP_{turn_after:04d}")
+            _housekeeping(gs, "autosave", f"0_MCP_{turn_after:04d}")
             cleanup_old_autosaves(keep=8)
         except Exception:
             log.debug("MCP autosave failed for T%s", turn_after, exc_info=True)
@@ -1622,4 +1668,91 @@ async def execute_end_turn(gs: GameState) -> str:
         notifications,
         stockpiles=snap_after.stockpiles if snap_after else None,
         score=game_score,
+    )
+
+
+@dataclass
+class EndTurnOutcome:
+    """Typed end-turn result derived from observable state, not report text.
+
+    status: "advanced", "blocked", "game_over", "aborted", or "not_advanced"
+    (no advance and nothing observable blocking, e.g. an AI-turn hang).
+    ``report`` is the legacy narration, kept for logs only.
+    """
+
+    status: str
+    turn_before: int | None
+    turn_after: int | None
+    blockers: list[tuple[str, str]] = field(default_factory=list)
+    diplomacy_pending: list[int] = field(default_factory=list)
+    deals_pending: list[int] = field(default_factory=list)
+    world_congress_pending: bool = False
+    end_turn_in_flight: bool = False
+    game_over: lq.GameOverStatus | None = None
+    housekeeping: list[dict] = field(default_factory=list)
+    report: str = ""
+
+
+async def execute_end_turn_typed(
+    gs: GameState, *, decision_only: bool = True
+) -> EndTurnOutcome:
+    """Run the end-turn state machine and classify the result by observation."""
+    previous_mode = _decision_only(gs)
+    gs.decision_only_end_turn = decision_only
+    gs.end_turn_housekeeping = []
+    if gs._pending_end_turn and gs._pending_end_turn_from is not None:
+        turn_before = gs._pending_end_turn_from
+    else:
+        turn_before = await _get_turn_number(gs)
+    try:
+        report = await execute_end_turn(gs)
+    finally:
+        gs.decision_only_end_turn = previous_mode
+    housekeeping = list(gs.end_turn_housekeeping)
+    turn_after = await _get_turn_number(gs)
+    base = dict(
+        turn_before=turn_before,
+        turn_after=turn_after,
+        housekeeping=housekeeping,
+        report=report,
+        end_turn_in_flight=gs._pending_end_turn,
+    )
+    if gs._run_aborted:
+        return EndTurnOutcome(status="aborted", **base)
+    game_over = await gs.check_game_over()
+    if game_over is not None:
+        return EndTurnOutcome(status="game_over", game_over=game_over, **base)
+    if turn_before is not None and turn_after is not None and turn_after > turn_before:
+        return EndTurnOutcome(status="advanced", **base)
+
+    sessions, deals, blockers, wc_pending = [], [], [], False
+    try:
+        sessions = await gs.get_diplomacy_sessions()
+    except Exception:
+        log.debug("Typed outcome: session query failed", exc_info=True)
+    try:
+        deals = await gs.get_pending_deals()
+    except Exception:
+        log.debug("Typed outcome: deal query failed", exc_info=True)
+    try:
+        blockers = lq.parse_end_turn_blocking(
+            await gs.conn.execute_write(lq.build_end_turn_blocking_query())
+        )
+    except Exception:
+        log.debug("Typed outcome: blocker query failed", exc_info=True)
+    try:
+        wc = await gs.get_world_congress()
+        wc_pending = bool(wc.resolutions) and (
+            wc.is_in_session or wc.turns_until_next <= 0
+        )
+    except Exception:
+        log.debug("Typed outcome: congress query failed", exc_info=True)
+    blocked = bool(sessions or deals or blockers or wc_pending)
+    return EndTurnOutcome(
+        status="blocked" if blocked else "not_advanced",
+        blockers=blockers,
+        diplomacy_pending=[s.other_player_id for s in sessions],
+        deals_pending=[d.other_player_id for d in deals],
+        world_congress_pending=wc_pending,
+        **base,
     )
