@@ -15,6 +15,7 @@ observe (typed) -> scheduler picks one entity -> enumerate candidates -> Drex ch
 | B — one real decision of each kind | Not run. No Civilization VI install on the development machine, and no working Drex key (below). |
 | C — 20 consecutive turns | Not run, same reasons. The runner, logging and stop/checkpoint paths are implemented and tested against an in-memory game. |
 | D — broader coverage, random baseline comparison | Not started beyond the labeled `random-baseline` selector. |
+| Phase 1 — resilience and speed (spec `docs/superpowers/specs/2026-09-30-civ-drex-never-stop-design.md`) | Done 2026-09-30 on branch `drex-phase1`. A run no longer ends for Drex API errors, tuner errors or loop guards; a full observation is 2 batched round trips; live turns 47–51 took 13–17 s wall including the AI turn (was ~54 s). See "Speed" and "No stops for infrastructure" below. |
 
 A Drex key (`nace_sk_...`, created at https://drex.nace.ai) is required; `apikey_` keys belong to TypeSafe and are rejected by drex.nace.ai with 401.
 
@@ -38,7 +39,17 @@ Live Drex checks (2026-09-29): the 2-option probe and four realistic fixture dec
 
 **No choice without Drex.** A candidate is executed without asking Drex only when the engine offered exactly one legal option (`forced_single_candidate`), or when the per-unit turn-ending rule leaves exactly one order (`forced_turn_ending_order`); both are logged with `selector: controller`. If Drex's choice fails and only one alternative is left (e.g. accept after a failed reject), it is never executed: the decision is dropped and the run stops with a checkpoint.
 
-**Failures.** Timeouts, transport and body-decoding errors, 429/5xx/529 and malformed bodies or answers are retried up to `DREX_MAX_RETRIES` with backoff (honouring `retry-after`), then the run pauses with a checkpoint. 401/403/400/422, requests over local limits and model mismatches pause immediately. There is no fallback model and no random fallback.
+**Failures.** There is no pause and no checkpoint stop for API errors. Transient errors (429/5xx/529, timeouts, transport errors, malformed bodies or answers) retry forever with exponential backoff capped at `DREX_MAX_BACKOFF_S` (default 60 s), honouring `retry-after`. Non-retryable errors (401/403, 400/422, model mismatch, a request over local limits) wait the same cap, re-read the env file and rebuild the client, so a rotated key or changed base URL is picked up without a restart. Every wait is a `selection_waiting` record and, after `DREX_MAX_RETRIES` attempts, a stderr line `waiting for Drex: ...`. There is no fallback model and no random fallback; nothing is decided while waiting.
+
+## No stops for infrastructure
+
+`civ-drex play` ends only at game over, at the `--turns` budget, or on Ctrl-C (exit code 130). Everything else is recovered:
+
+- A dropped tuner socket, a Lua error or a timeout while observing, prechecking or verifying reconnects with backoff (1 s doubling to 30 s) and resumes from a fresh observation (`game_io_error` records). A dispatch that raises is still never re-sent; the executor reconciles it by reading state.
+- If the outage lasts `GAME_DEAD_AFTER_S` (default 120 s), the game is relaunched and the newest `0_MCP_NNNN` autosave loaded (`game_relaunch` record). That path drives the menu by screen OCR and needs the game in windowed or borderless mode: set `FullScreen 2` in `AppOptions.txt`; `civ-drex probe` warns when it is `1`.
+- Any other exception is logged with its traceback (`runner_error`), a `DREX_CHECKPOINT_TNNNN` save is written, and the loop resumes.
+- Loop guards no longer stop: the per-turn decision cap (200) ends the turn (`budget_end_turn`); a diplomacy session whose failure budget is spent gets one more Drex decision that includes "Close the screen" (`EXIT`), then is left alone; an unresolved deal is left alone; a blocked end turn with nothing new to decide re-observes and, after three repeats, dismisses popups and requests once more (`end_turn_blocked_repeat`); a game identity change is logged (`identity_changed`) and the run continues; an informational session that will not close is logged (`informational_session_stuck`) and skipped for the turn.
+- A blocker no decision kind handles yet (Phase 2 adds them; see the coverage matrix in the spec) is logged as `unsupported_blocker` and the run waits 30 s and re-observes, forever if need be. Nothing is decided without Drex. A restart on newer code picks the game up from that point.
 
 ## Install and run
 
@@ -54,7 +65,9 @@ cp docs/drex.env.example ~/.config/civ-drex/drex.env && chmod 600 ~/.config/civ-
 uv run civ-drex verify-api --probe       # lists models, sends one 2-option Choice
 ```
 
-Game setup (Milestone B/C): Steam Civilization VI with Gathering Storm; set `EnableTuner 1` (macOS: `~/Library/Application Support/Sid Meier's Civilization VI/Firaxis Games/Sid Meier's Civilization VI/AppOptions.txt`; Windows: in-game option); disable Auto End Turn; close FireTuner and any other tuner client (the game accepts one connection; do not run `civ-mcp` at the same time); load a single-player save manually. Tuner disables achievements. Then:
+Optional settings in `drex.env`: `DREX_MAX_BACKOFF_S` (60) caps the wait between Drex retries; `GAME_DEAD_AFTER_S` (120, environment only) is how long a tuner outage may last before the game is relaunched.
+
+Game setup (Milestone B/C): Steam Civilization VI with Gathering Storm; set `EnableTuner 1` (macOS: `~/Library/Application Support/Sid Meier's Civilization VI/Firaxis Games/Sid Meier's Civilization VI/AppOptions.txt`; Windows: in-game option); disable Auto End Turn; set `FullScreen 2` (borderless) in `AppOptions.txt` so the game can be relaunched automatically after a crash; close FireTuner and any other tuner client (the game accepts one connection; do not run `civ-mcp` at the same time); load a single-player save manually. Tuner disables achievements. Then:
 
 ```bash
 uv run python scripts/test_connection.py            # handshake smoke test
@@ -68,11 +81,24 @@ uv run civ-drex replay --fixture t.json --answer response.json        # offline 
 
 `fixtures/drex/` holds synthetic observations for offline replay, e.g. `uv run civ-drex replay --fixture fixtures/drex/t5_research.json --answer fixtures/drex/answer_t5_research.SYNTHETIC.json`. The answer file is synthetic, not a Drex response.
 
-Exit codes: 0 success/turn budget reached/game over, 2 configuration or API/connection error, 3 run stopped early (see `stop_reason`), 4 replayed answer rejected.
+Exit codes: 0 turn budget reached or game over, 2 configuration or connection error before the run starts, 4 replayed answer rejected (offline `replay`), 130 interrupted with Ctrl-C. A running game never exits early for an API or tuner error.
 
 ### Recording the starting save (Milestone C)
 
 Record in the run notes: save file name and SHA-256, game build (main menu), DLC and mods, civilization/leader, map type/size, difficulty, speed, start turn, and the `game.civ`/`game.seed` from the log header (from `civ-drex probe`). Keep the save untouched; the run writes `DREX_CHECKPOINT_TNNNN` saves only when it stops early, plus the existing `0_MCP_NNNN` per-turn autosaves.
+
+## Speed
+
+The tuner is the bottleneck, not Drex: one round trip costs about 57 ms (it was ~350 ms before the fixed drain waits in `GameConnection` were cut from 0.3 s to 0.03 s). Phase 1 removed round trips rather than checks:
+
+- The whole observation is two batched Lua scripts (`GameState.get_core_snapshot`, `src/civ_mcp/lua/batch.py`): one InGame (identity, overview, cities, units, sessions, deals, blockers, popup state), one GameCore (tech, progress). Nine round trips became two, about 300 ms live.
+- After an action only the parts it can change are re-read (`src/civ_mcp/drex/refresh.py`); once per turn, before end turn, a full read runs as a safety net whenever a partial refresh happened.
+- Prechecks reuse the decision's own reads while the observation is current; moves, production, research, civics and skips are confirmed from the dispatch output instead of readback polls.
+- While Drex chooses, the next unit's inputs are prefetched; the reads finish before anything is dispatched.
+- The popup watcher no longer polls: the observation carries the popup state, and camera and dismissals hold while the engine processes the AI turn.
+- In decision-only mode the end turn skips the narration-only victory and empire-warning reads and uses 0.5 s polling sleeps.
+
+Budget, enforced by `tests/drex/test_drex_speed.py`: at most 2 round trips to execute a decision and 1 for the partial refresh that follows. Every `decision` record carries `timing_ms.observe`, `observe_roundtrips`, `execute_roundtrips` and `roundtrips`; every advanced turn writes a `speed` record (decisions, seconds, round trips, Drex seconds, end-turn seconds, end-turn `phase_ms`) and a stderr line. `uv run python scripts/drex_timing.py logs/drex/<run>.jsonl` summarises a log. Measured live 2026-09-30 (turns 47–51, before Tasks 10–14): observe median 65 ms, execute 104 ms, Drex 522 ms, round trips median 3; turns 13–17 s wall including 2–8 s end turn.
 
 ## Scheduler order
 
@@ -112,6 +138,7 @@ Outcomes are `confirmed`, `pending` (accepted, effect asynchronous), `rejected` 
 ## Who decides what
 
 - **Drex:** every selection among two or more candidates. Without Drex, only the engine's single legal option (`forced_single_candidate`) or the single order left by the turn-ending rule (`forced_turn_ending_order`) is executed, labeled as such.
+- **Drex, after a session's failure budget is spent:** the same responses plus "Close the screen" (`EXIT`). The controller never closes a decision-bearing screen on its own; it only closes informational ones (goodbye phases, deal-free sessions from a player at war).
 - **Controller heuristics (deterministic code):** the scheduler order; deciding research/civic only when nothing is selected and production only for empty queues; excluding placement-dependent production; move filtering (own same-formation stacks use the same civilian/non-civilian rule `build_move_unit` enforces at dispatch); the 3-decisions-per-unit budget and turn-ending-only final decision; the nearest-first shortlist if options exceed the limit (never triggered in tests); a failure budget of 2 per decision key per turn, with failed candidates excluded for the rest of the turn; closing informational diplomacy sessions; the configured objective text.
 - **Retained engine / existing behaviour:** pathfinding and move execution; combat resolution; `move_unit`/`attack_unit`/`found_city` popup pre-dismissal and one `found_city` retry; `diplomacy_respond` auto-closing a goodbye phase; `set_research`/`set_civic` GameCore fallback when the InGame request silently fails (after the engine eligibility precheck); `get_cities` removing ghost (hash 0) queue entries; per-turn `0_MCP_NNNN` autosaves; `execute_end_turn` synchronization (`_pending_end_turn`, polling, hang detection). No built-in AI automation (auto-explore, automated builders) is used.
 - **`execute_end_turn` in decision-only mode** (`GameState.decision_only_end_turn`, set by `execute_end_turn_typed`): consequential auto-resolutions are disabled — keeping captured/disloyal cities, passing World Congress interactions (also when a vote handler from an earlier session is still registered), dismissing governor/government prompts, choosing spy escape routes, clearing stored promotions, dismissing corrupted production prompts, dismissing an at-war session that carries a deal during the AI turn, and re-sending the end-turn request after a timeout. Retained and logged per turn as `housekeeping`: dismissal of deal-free sessions from at-war players (war declarations cannot be declined), popup dismissal, World Congress "look", envoy prompt with zero tokens, stale research/civic notification when a choice is already set, finishing zero-move units, autosave. MCP behaviour is unchanged when the flag is off (including the upstream behaviour of dismissing every at-war session during the AI turn, which can discard a peace offer).
@@ -122,7 +149,7 @@ Per decision: the configured objective; turn; own empire totals (gold, yields, c
 
 ## Decision log
 
-`logs/drex/<run_id>.jsonl`, one JSON object per line: `header` (run id, git describe, package version, Drex base URL/model/limits, selector, game civ/seed, start turn, config, scheduler order), `decision` (observation version, candidates with typed params, legal count and forced rule, exclusions, exact request sent, probabilities per candidate id, rule, confidence, model, usage, request id, attempts, dispatch, outcome with evidence, API and execution time), `turn` (typed end-turn status, blockers, housekeeping, end-turn time, legacy report), `housekeeping`, `housekeeping_planned` (dry-run), `no_candidates`, `selection_paused`, `dry_run`, `stop` (reason, turns advanced, decisions, checkpoint, API time vs game time). Any unexpected exception ends the run with a `stop` record (`error:<type>: <message>`) and a checkpoint. The API key and any `Authorization`/`api_key` fields are redacted before writing.
+`logs/drex/<run_id>.jsonl`, one JSON object per line. Phase 1 added `selection_waiting`, `game_io_error`, `game_relaunch`, `runner_error`, `checkpoint_failed`, `unsupported_blocker`, `budget_end_turn`, `identity_changed`, `informational_session_stuck`, `end_turn_blocked_repeat`, `end_turn_status` and `speed`; `decision.timing_ms` gained `observe`, `observe_roundtrips`, `execute_roundtrips`, `roundtrips`; `turn` gained `roundtrips` and `phase_ms`. Existing types: `header` (run id, git describe, package version, Drex base URL/model/limits, selector, game civ/seed, start turn, config, scheduler order), `decision` (observation version, candidates with typed params, legal count and forced rule, exclusions, exact request sent, probabilities per candidate id, rule, confidence, model, usage, request id, attempts, dispatch, outcome with evidence, API and execution time), `turn` (typed end-turn status, blockers, housekeeping, end-turn time, legacy report), `housekeeping`, `housekeeping_planned` (dry-run), `no_candidates`, `selection_paused`, `dry_run`, `stop` (reason, turns advanced, decisions, checkpoint, API time vs game time). Any unexpected exception ends the run with a `stop` record (`error:<type>: <message>`) and a checkpoint. The API key and any `Authorization`/`api_key` fields are redacted before writing.
 
 ## Tests
 

@@ -41,7 +41,7 @@ from civ_mcp.drex.selectors import DrexSelector, RandomSelector, build_request
 from civ_mcp.drex.serialize import from_jsonable
 from civ_mcp.drex.spectate import LiveSpectator
 
-SUCCESS_STOPS = {"turn_budget_reached", "game_over", "dry_run_complete"}
+SUCCESS_STOPS = frozenset({"turn_budget_reached", "game_over", "dry_run_complete"})
 
 
 def _print(data: Any) -> None:
@@ -234,6 +234,8 @@ async def _run_live(args: argparse.Namespace, *, dry_run: bool) -> int:
             await client.aclose()
         await conn.disconnect()
     _print({"log": str(log_path), **result.__dict__})
+    if result.stop_reason == "interrupted":
+        return 130
     return 0 if result.stop_reason in SUCCESS_STOPS else 3
 
 
