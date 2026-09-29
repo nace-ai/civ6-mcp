@@ -146,3 +146,18 @@ class TestSerialization:
         )
         data = json.loads(json.dumps(to_jsonable(inputs)))
         assert from_jsonable(DecisionInputs, data) == inputs
+
+
+def test_fogged_tiles_drop_possibly_stale_feature_improvement_and_district():
+    tiles = fx.tiles_around_warrior()
+    fogged = next(t for t in tiles if t.visibility == "revealed")
+    fogged.feature, fogged.improvement, fogged.district = (
+        "FEATURE_FOREST",
+        "IMPROVEMENT_FARM",
+        "DISTRICT_CAMPUS",
+    )
+    tile = next(
+        t for t in visible_tiles(tiles, me=fx.ME) if t["visibility"] == "revealed"
+    )
+    assert {"feature", "improvement", "district"}.isdisjoint(tile)
+    assert tile["terrain"] == "Grass"

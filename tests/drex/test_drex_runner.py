@@ -38,6 +38,7 @@ class PausingSelector:
 
 def _fake_end_turn(game):
     async def end_turn(gs):
+        game.end_turn_attempts = getattr(game, "end_turn_attempts", 0) + 1
         blockers = await game.get_end_turn_blockers()
         before = game.turn
         if blockers:
@@ -229,3 +230,185 @@ def test_informational_war_session_is_closed_as_logged_housekeeping(tmp_path):
     assert ("diplomacy_respond", (1, "EXIT")) in game.calls
     hk = [r for r in _records(tmp_path) if r["type"] == "housekeeping"]
     assert hk and hk[0]["action"] == "informational_session_closed"
+
+
+def test_multi_round_diplomacy_keeps_the_models_reply(tmp_path):
+    game = FakeGame()
+    game.sessions = [fx.session()]
+    game.session_rounds[1] = 2
+    runner, _ = _runner(
+        game,
+        tmp_path,
+        selector=PreferSelector(
+            prefixes=("diplomacy:1:POSITIVE", "skip:", "research:", "produce:")
+        ),
+    )
+    asyncio.run(runner.run())
+    replies = [args for m, args in game.calls if m == "diplomacy_respond"]
+    assert replies == [(1, "POSITIVE"), (1, "POSITIVE")]
+
+
+def test_unobserved_deal_rejection_is_never_inverted_into_acceptance(tmp_path):
+    game = FakeGame()
+    game.deals = [fx.deal()]
+    game.sessions = [fx.session(deal_summary="They offer: Gold per turn")]
+    game.deal_sticky = True
+    runner, checkpoints = _runner(
+        game, tmp_path, selector=PreferSelector(prefixes=("deal:1:reject",))
+    )
+    result = asyncio.run(runner.run())
+    assert ("respond_to_deal", (1, True)) not in game.calls
+    assert result.stop_reason.startswith(("deal_unresolved", "selector_paused"))
+    assert checkpoints
+
+
+def test_at_war_peace_deal_reaches_the_selector_instead_of_being_closed(tmp_path):
+    game = FakeGame()
+    game.sessions = [fx.session(is_at_war=True)]
+    game.deals = [fx.deal()]
+    selector = PreferSelector(
+        prefixes=("deal:1:accept", "skip:", "research:", "produce:")
+    )
+    runner, _ = _runner(game, tmp_path, selector=selector)
+    asyncio.run(runner.run())
+    assert ("diplomacy_respond", (1, "EXIT")) not in game.calls
+    assert ("respond_to_deal", (1, True)) in game.calls
+
+
+def test_dry_run_never_closes_sessions(tmp_path):
+    game = FakeGame()
+    game.sessions = [fx.session(is_at_war=True)]
+    runner, _ = _runner(game, tmp_path, dry_run=True)
+    result = asyncio.run(runner.run())
+    assert result.stop_reason == "dry_run_complete"
+    assert game.calls == []
+
+
+def test_unexpected_error_stops_with_record_and_checkpoint(tmp_path):
+    from civ_mcp.connection import LuaError
+
+    game = FakeGame()
+
+    async def broken(unit_index):
+        raise LuaError("ERR: attempt to index a nil value")
+
+    game.get_unit_action_space = broken
+    runner, checkpoints = _runner(game, tmp_path)
+    result = asyncio.run(runner.run())
+    assert result.stop_reason.startswith("error:LuaError")
+    assert checkpoints
+    assert _records(tmp_path)[-1]["type"] == "stop"
+
+
+def test_blocked_end_turn_with_nothing_new_to_decide_is_not_retried(tmp_path):
+    game = FakeGame()
+    game.extra_blockers = [("ENDTURN_BLOCKING_UNITS", "Units need orders")]
+    runner, _ = _runner(game, tmp_path)
+    result = asyncio.run(runner.run())
+    assert result.stop_reason == "end_turn_blocked:ENDTURN_BLOCKING_UNITS"
+    assert game.end_turn_attempts == 1
+
+
+def test_war_interruption_allows_exactly_one_new_end_turn_request(tmp_path):
+    game = FakeGame()
+    normal = _fake_end_turn(game)
+    first = True
+
+    async def end_turn(gs):
+        nonlocal first
+        if first:
+            first = False
+            game.end_turn_attempts = 1
+            return EndTurnOutcome(
+                status="interrupted",
+                turn_before=5,
+                turn_after=5,
+                housekeeping=[
+                    {"action": "war_declaration_dismissed", "detail": "Egypt"}
+                ],
+            )
+        return await normal(gs)
+
+    log = DecisionLog(tmp_path / "run.jsonl", run_id="drex-test", secrets=[])
+    runner = Runner(
+        game,
+        PreferSelector(),
+        log,
+        RunConfig(turns=1),
+        end_turn=end_turn,
+        checkpoint=lambda gs, t: None,
+    )
+    result = asyncio.run(runner.run())
+    assert result.stop_reason == "turn_budget_reached"
+    assert game.end_turn_attempts == 2
+
+
+def test_only_sessions_and_deals_are_observed_while_end_turn_is_in_flight(tmp_path):
+    game = FakeGame()
+    normal = _fake_end_turn(game)
+    seen = {}
+    first = True
+
+    async def end_turn(gs):
+        nonlocal first
+        if first:
+            first = False
+            game.sessions = [fx.session()]
+            seen["units_queries"] = game.query_counts["get_units"]
+            return EndTurnOutcome(
+                status="blocked",
+                turn_before=5,
+                turn_after=5,
+                diplomacy_pending=[1],
+                end_turn_in_flight=True,
+            )
+        seen["units_queries_at_resume"] = game.query_counts["get_units"]
+        return await normal(gs)
+
+    log = DecisionLog(tmp_path / "run.jsonl", run_id="drex-test", secrets=[])
+    selector = PreferSelector(
+        prefixes=("diplomacy:1:POSITIVE", "skip:", "research:", "produce:")
+    )
+    runner = Runner(
+        game,
+        selector,
+        log,
+        RunConfig(turns=1),
+        end_turn=end_turn,
+        checkpoint=lambda gs, t: None,
+    )
+    result = asyncio.run(runner.run())
+    assert result.stop_reason == "turn_budget_reached"
+    assert ("diplomacy_respond", (1, "POSITIVE")) in game.calls
+    assert seen["units_queries_at_resume"] == seen["units_queries"]
+
+
+def test_pending_world_congress_stops_without_retrying(tmp_path):
+    game = FakeGame()
+    attempts = 0
+
+    async def end_turn(gs):
+        nonlocal attempts
+        attempts += 1
+        return EndTurnOutcome(
+            status="blocked", turn_before=5, turn_after=5, world_congress_pending=True
+        )
+
+    checkpoints = []
+
+    async def checkpoint(gs, turn):
+        checkpoints.append(turn)
+        return "cp"
+
+    log = DecisionLog(tmp_path / "run.jsonl", run_id="drex-test", secrets=[])
+    runner = Runner(
+        game,
+        PreferSelector(),
+        log,
+        RunConfig(turns=1),
+        end_turn=end_turn,
+        checkpoint=checkpoint,
+    )
+    result = asyncio.run(runner.run())
+    assert result.stop_reason == "unsupported_blocker:world_congress"
+    assert attempts == 1 and checkpoints == [5]

@@ -200,3 +200,16 @@ def test_informational_sessions_are_listed_for_housekeeping():
         ]
     )
     assert Scheduler().informational_sessions(core) == [1, 2]
+
+
+def test_at_war_session_carrying_a_deal_is_decided_not_closed():
+    core = _core(
+        diplomacy_sessions=[fx.session(is_at_war=True)], pending_deals=[fx.deal()]
+    )
+    assert Scheduler().informational_sessions(core) == []
+    assert _next(core) == DecisionSpec(DecisionCategory.DEAL, "player:1")
+
+
+def test_at_war_session_without_a_deal_is_informational():
+    core = _core(diplomacy_sessions=[fx.session(is_at_war=True)])
+    assert Scheduler().informational_sessions(core) == [1]

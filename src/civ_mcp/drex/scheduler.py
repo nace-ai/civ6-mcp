@@ -76,7 +76,6 @@ class TurnLedger:
     failures: Counter[str] = field(default_factory=Counter)
     failed_candidates: set[str] = field(default_factory=set)
     decisions: int = 0
-    blocked_end_turns: int = 0
 
 
 def key_for(spec: DecisionSpec) -> str:
@@ -92,8 +91,18 @@ def key_for(spec: DecisionSpec) -> str:
     return f"{spec.category}:{spec.entity_id}"
 
 
-def _informational(session) -> bool:
-    return session.is_at_war or session.buttons == "GOODBYE"
+def _informational(session, deal_players: set[int]) -> bool:
+    """Goodbye phases, and sessions from players we are at war with that carry
+    no deal (war declarations cannot be declined). ``is_at_war`` describes the
+    relationship, not the session, so an at-war session with a deal (e.g. a
+    peace offer) is a decision."""
+    if session.buttons == "GOODBYE":
+        return True
+    return (
+        session.is_at_war
+        and not session.deal_summary
+        and session.other_player_id not in deal_players
+    )
 
 
 class Scheduler:
@@ -130,8 +139,11 @@ class Scheduler:
         return limit is None or ledger.counts[key] < limit
 
     def informational_sessions(self, core: CoreObservation) -> list[int]:
+        deal_players = {d.other_player_id for d in core.pending_deals}
         return sorted(
-            s.other_player_id for s in core.diplomacy_sessions if _informational(s)
+            s.other_player_id
+            for s in core.diplomacy_sessions
+            if _informational(s, deal_players)
         )
 
     def unsupported_blockers(self, core: CoreObservation) -> list[str]:
@@ -144,13 +156,23 @@ class Scheduler:
     def next(
         self, core: CoreObservation, ledger: TurnLedger
     ) -> DecisionSpec | EndTurn | Stop:
+        reactive = self.next_reactive(core, ledger)
+        if reactive is not None:
+            return reactive
+        return self._next_proactive(core, ledger)
+
+    def next_reactive(
+        self, core: CoreObservation, ledger: TurnLedger
+    ) -> DecisionSpec | Stop | None:
+        """Diplomacy sessions and incoming deals only (safe while an end turn
+        is in flight); None when neither needs a decision."""
         if ledger.decisions >= self.max_decisions_per_turn:
             return Stop(f"decision_budget_exhausted:{ledger.decisions}")
 
         deal_players = {d.other_player_id for d in core.pending_deals}
         for s in sorted(core.diplomacy_sessions, key=lambda s: s.other_player_id):
             pid = s.other_player_id
-            if _informational(s) or pid in deal_players:
+            if _informational(s, deal_players) or pid in deal_players:
                 continue
             if s.deal_summary:
                 return Stop(
@@ -166,7 +188,11 @@ class Scheduler:
             if not self._open(ledger, spec):
                 return Stop(f"deal_unresolved:player_{d.other_player_id}")
             return spec
+        return None
 
+    def _next_proactive(
+        self, core: CoreObservation, ledger: TurnLedger
+    ) -> DecisionSpec | EndTurn:
         blockers = core.blocker_types()
         for blocker, category in (
             (GOVERNMENT_BLOCKER, DecisionCategory.GOVERNMENT),

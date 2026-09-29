@@ -5,15 +5,39 @@ kind of state change the engine would, and records every call. Failures can
 be injected before or after a mutation is applied.
 """
 
+import contextlib
 import copy
+from collections import Counter
 
 import drex_fixtures as fx
 
 from civ_mcp import lua as lq
 
 
+class FakeConn:
+    """Mimics GameConnection.replay_disabled() so tests can see its state."""
+
+    def __init__(self):
+        self.replay_on_disconnect = True
+
+    @contextlib.contextmanager
+    def replay_disabled(self):
+        previous = self.replay_on_disconnect
+        self.replay_on_disconnect = False
+        try:
+            yield
+        finally:
+            self.replay_on_disconnect = previous
+
+
 class FakeGame:
     def __init__(self):
+        self.conn = FakeConn()
+        self.replay_at_call: list[bool] = []
+        self.query_counts: Counter[str] = Counter()
+        self.session_rounds: dict[int, int] = {}
+        self.deal_sticky = False
+        self.attack_refused = False
         self.calls: list[tuple[str, tuple]] = []
         self.turn = 5
         self.civ, self.seed = "rome", 42
@@ -50,6 +74,7 @@ class FakeGame:
     # ---------------------------------------------------------------- helpers
     def _record(self, method, *args):
         self.calls.append((method, args))
+        self.replay_at_call.append(self.conn.replay_on_disconnect)
         fail = self.fail.pop(method, None)
         if fail and not fail[1]:
             raise fail[0]
@@ -118,6 +143,7 @@ class FakeGame:
         return set(fx.WONDERS)
 
     async def get_units(self):
+        self.query_counts["get_units"] += 1
         return [copy.deepcopy(u) for u in self.units.values()]
 
     async def get_unit_action_space(self, unit_index):
@@ -232,10 +258,14 @@ class FakeGame:
 
     async def attack_unit(self, unit_index, x, y):
         fail = self._record("attack_unit", unit_index, x, y)
+        estimate = "Combat estimate: WARRIOR (CS 20) vs WARRIOR (CS 20) -> ~30 dmg\n"
+        if self.attack_refused:
+            self._after(fail)
+            return estimate + f"Error: NO_ENEMY|No hostile unit at ({x},{y})"
         u = self._by_index(unit_index)
         self._set_pos(unit_index, u.x, u.y, 0.0)
         self._after(fail)
-        return f"MELEE_ATTACK|target:UNIT_WARRIOR at ({x},{y})"
+        return estimate + f"MELEE_ATTACK|target:UNIT_WARRIOR at ({x},{y})"
 
     async def found_city(self, unit_index):
         fail = self._record("found_city", unit_index)
@@ -278,15 +308,28 @@ class FakeGame:
 
     async def diplomacy_respond(self, other_player_id, response):
         fail = self._record("diplomacy_respond", other_player_id, response)
-        self.sessions = [
-            s for s in self.sessions if s.other_player_id != other_player_id
-        ]
+        remaining = self.session_rounds.get(other_player_id, 1) - 1
+        self.session_rounds[other_player_id] = remaining
+        if response == "EXIT" or remaining <= 0:
+            self.sessions = [
+                s for s in self.sessions if s.other_player_id != other_player_id
+            ]
+            status = "SESSION_CLOSED"
+        else:
+            for s in self.sessions:
+                if s.other_player_id == other_player_id:
+                    s.dialogue_text = f"{s.dialogue_text} (round {remaining})"
+            status = "SESSION_CONTINUES"
         self._after(fail)
-        return f"OK:RESPONDED|{response}|SESSION_CLOSED"
+        return f"OK:RESPONDED|{response}|{status}"
 
     async def respond_to_deal(self, other_player_id, accept):
         fail = self._record("respond_to_deal", other_player_id, accept)
-        self.deals = [d for d in self.deals if d.other_player_id != other_player_id]
+        if not self.deal_sticky:
+            self.deals = [d for d in self.deals if d.other_player_id != other_player_id]
+            self.sessions = [
+                s for s in self.sessions if s.other_player_id != other_player_id
+            ]
         self._after(fail)
         return "DEAL_ACCEPTED|Egypt" if accept else "DEAL_REJECTED|Egypt"
 

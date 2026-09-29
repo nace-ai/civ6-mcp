@@ -128,3 +128,15 @@ def test_help_lists_commands(capsys):
     text = capsys.readouterr().out
     for cmd in ("verify-api", "play", "dry-run", "replay", "probe"):
         assert cmd in text
+
+
+def test_unexpected_error_returns_exit_code_3(tmp_path, capsys, monkeypatch):
+    from civ_mcp.connection import GameConnection
+
+    async def broken_connect(self):
+        raise RuntimeError("tuner handshake garbled")
+
+    monkeypatch.setattr(GameConnection, "connect", broken_connect)
+    code = main(["play", "--selector", "random-baseline", "--log-dir", str(tmp_path)])
+    assert code == 3
+    assert "RuntimeError" in capsys.readouterr().err

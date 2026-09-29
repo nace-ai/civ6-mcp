@@ -16,6 +16,7 @@ never retried; the executor reconciles by re-reading state instead.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import time
 from collections.abc import Awaitable, Callable
@@ -150,7 +151,15 @@ def _no(reason: str) -> _Precheck:
 
 
 def _game_error(raw: str) -> bool:
-    return raw.startswith("Error") or raw.startswith("ERR:")
+    # Some results carry narration before the result line (e.g. attack_unit
+    # prepends a combat estimate), so check every line.
+    return any(line.startswith(("Error", "ERR:")) for line in raw.splitlines())
+
+
+def _no_replay(gs: Any) -> contextlib.AbstractContextManager[Any]:
+    conn = getattr(gs, "conn", None)
+    replay_disabled = getattr(conn, "replay_disabled", None)
+    return replay_disabled() if replay_disabled else contextlib.nullcontext()
 
 
 class Executor:
@@ -166,7 +175,7 @@ class Executor:
         self._poll_attempts = max(1, poll_attempts)
         self._poll_interval_s = poll_interval_s
         self._sleep = sleep
-        self._dispatched: set[tuple[int, str]] = set()
+        self._dispatched: set[tuple[int, str, Any]] = set()
 
     async def execute(
         self,
@@ -192,17 +201,18 @@ class Executor:
             return ActionOutcome(
                 OutcomeStatus.REJECTED, "not_a_candidate_of_decision", False
             )
-        key = (turn, candidate.candidate_id)
-        if key in self._dispatched:
-            return ActionOutcome(
-                OutcomeStatus.REJECTED, "already_dispatched_this_turn", False
-            )
-
         try:
             pre = await self._precheck(candidate)
         except Exception as e:  # a failed read must never lead to a dispatch
             return ActionOutcome(
                 OutcomeStatus.REJECTED, f"precheck_error:{type(e).__name__}", False
+            )
+        # Repeatable decisions (another envoy, a reply in a new dialogue round)
+        # are distinct actions only when the observed state differs.
+        key = (turn, candidate.candidate_id, pre.state.get("dedup"))
+        if key in self._dispatched:
+            return ActionOutcome(
+                OutcomeStatus.REJECTED, "already_dispatched_this_turn", False
             )
         if not pre.ok:
             return ActionOutcome(
@@ -213,7 +223,8 @@ class Executor:
         self._dispatched.add(key)
         raw, error = "", None
         try:
-            result = await getattr(self.gs, call.method)(*call.args)
+            with _no_replay(self.gs):
+                result = await getattr(self.gs, call.method)(*call.args)
             raw = result if isinstance(result, str) else str(result)
         except Exception as e:
             error = f"{type(e).__name__}: {e}"
@@ -343,7 +354,7 @@ class Executor:
                 )
                 if s is None or s.is_at_war or s.buttons == "GOODBYE" or s.deal_summary:
                     return _no("session_not_open_for_response")
-                return _ok()
+                return _ok(dedup=(s.dialogue_text, s.reason_text, s.buttons))
 
             case ActionKind.DEAL_RESPOND:
                 deals = await gs.get_pending_deals()
@@ -380,7 +391,9 @@ class Executor:
                 )
                 if status.tokens_available <= 0 or cs is None or not cs.can_send_envoy:
                     return _no("cannot_send_envoy")
-                return _ok(tokens=status.tokens_available)
+                return _ok(
+                    tokens=status.tokens_available, dedup=status.tokens_available
+                )
 
             case ActionKind.CHANGE_GOVERNMENT:
                 govs = await gs.get_available_governments()
@@ -553,35 +566,57 @@ class Executor:
                 return self._unconfirmed(raw, "deal_still_pending")
 
             case ActionKind.SET_POLICY:
-                status = await gs.get_policies()
-                slot = next(
-                    (s for s in status.slots if s.slot_index == p.slot_index), None
-                )
-                if slot is not None and slot.current_policy == p.policy_type:
+
+                async def slotted():
+                    status = await gs.get_policies()
+                    slot = next(
+                        (s for s in status.slots if s.slot_index == p.slot_index), None
+                    )
+                    return slot is not None and slot.current_policy == p.policy_type
+
+                if await self._poll(slotted):
                     return confirmed("policy_slotted")
                 return self._unconfirmed(raw, "policy_not_slotted")
 
             case ActionKind.SEND_ENVOY:
-                status = await gs.get_city_states()
-                if status.tokens_available < pre["tokens"]:
+
+                async def spent():
+                    status = await gs.get_city_states()
+                    return status.tokens_available < pre["tokens"]
+
+                if await self._poll(spent):
                     return confirmed("envoy_token_spent")
                 return self._unconfirmed(raw, "envoy_token_not_spent")
 
             case ActionKind.CHANGE_GOVERNMENT:
-                status = await gs.get_policies()
-                if status.government_type == p.government_type:
+
+                async def adopted():
+                    status = await gs.get_policies()
+                    return status.government_type == p.government_type
+
+                if await self._poll(adopted):
                     return confirmed("government_observed")
                 return self._unconfirmed(raw, "government_not_observed")
 
             case ActionKind.KEEP_GOVERNMENT:
-                blockers = await gs.get_end_turn_blockers()
-                if all(b[0] != CONSIDER_GOVERNMENT for b in blockers):
+
+                async def cleared():
+                    blockers = await gs.get_end_turn_blockers()
+                    return all(b[0] != CONSIDER_GOVERNMENT for b in blockers)
+
+                if await self._poll(cleared):
                     return confirmed("government_prompt_cleared")
                 return self._unconfirmed(raw, "government_prompt_still_blocking")
 
             case ActionKind.CHOOSE_PANTHEON:
-                status = await gs.get_pantheon_status()
-                if status.has_pantheon and status.current_belief == p.belief_type:
+
+                async def chosen():
+                    status = await gs.get_pantheon_status()
+                    return (
+                        status.has_pantheon and status.current_belief == p.belief_type
+                    )
+
+                if await self._poll(chosen):
                     return confirmed("pantheon_observed")
                 return self._unconfirmed(raw, "pantheon_not_observed")
         return ActionOutcome(OutcomeStatus.UNKNOWN, "no_verifier", True)

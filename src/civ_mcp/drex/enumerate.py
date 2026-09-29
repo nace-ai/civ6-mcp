@@ -201,7 +201,9 @@ def unit_candidates(
                 label=f"Move to ({t.x},{t.y})",
                 facts={
                     "terrain": pretty(t.terrain),
-                    "feature": pretty(t.feature) if t.feature else None,
+                    "feature": pretty(t.feature)
+                    if t.feature and t.visibility == "visible"
+                    else None,
                     "resource": pretty(t.resource) if t.resource else None,
                     "hills": t.is_hills,
                     "river": t.is_river,
@@ -341,7 +343,7 @@ def envoy_candidates(status: lq.EnvoyStatus) -> list[Candidate]:
         Candidate.create(
             ActionKind.SEND_ENVOY,
             EnvoyParams(city_state_player_id=cs.player_id),
-            label=cs.name,
+            label=cs.name or f"City-state {cs.player_id}",
             facts={
                 "type": cs.city_state_type,
                 "envoys_already_sent": cs.envoys_sent,
@@ -398,8 +400,8 @@ def shortlist(
 ) -> tuple[list[Candidate], list[Exclusion]]:
     """Deterministic cut to the selector's option limit.
 
-    Every non-move action is kept; moves are kept nearest-first (distance,
-    then candidate id) until the limit is reached.
+    Non-move actions come first (in input order, up to the limit); remaining
+    room goes to moves nearest-first (distance, then candidate id).
     """
     if len(candidates) <= limit:
         return list(candidates), []

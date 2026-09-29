@@ -219,3 +219,23 @@ def test_shortlist_keeps_non_moves_then_nearest_moves():
     (move,) = [c for c in kept if c.kind is ActionKind.MOVE_UNIT]
     assert move.facts["distance"] == 1
     assert len(dropped) == 2 and all("limit" in e.reason for e in dropped)
+
+
+def test_envoy_label_falls_back_when_name_is_empty():
+    status = fx.envoys()
+    status.city_states[0].name = ""
+    assert "City-state 20" in {c.label for c in envoy_candidates(status)}
+
+
+def test_revealed_destination_omits_possibly_stale_feature():
+    space = fx.warrior_space()
+    fogged = next(t for t in space.reachable if t.visibility == "revealed")
+    fogged.feature = "FEATURE_FOREST"
+    cands, _ = unit_candidates(space, fx.warrior(), me=fx.ME)
+    move = next(
+        c
+        for c in cands
+        if c.kind is ActionKind.MOVE_UNIT
+        and (c.params.to_x, c.params.to_y) == (fogged.x, fogged.y)
+    )
+    assert move.facts["feature"] is None

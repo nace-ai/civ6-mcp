@@ -132,3 +132,13 @@ class TestSmallQueries:
         ]
         assert govs[0].slots == ["SLOT_MILITARY", "SLOT_ECONOMIC"]
         assert govs[1].is_current is True
+
+
+def test_siege_units_use_bombard_strength_for_ranged_attacks():
+    assert "Bombard" in build_unit_action_space_query(3)
+
+
+def test_pending_deals_query_names_unrecognised_agreements():
+    from civ_mcp.lua.diplomacy import build_pending_deals_query
+
+    assert "pairs(DealAgreementTypes)" in build_pending_deals_query()

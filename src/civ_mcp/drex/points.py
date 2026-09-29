@@ -122,11 +122,22 @@ def build_decision_point(
     exclude_kinds: frozenset[ActionKind] = frozenset(),
 ) -> tuple[DecisionPoint | None, list[Exclusion]]:
     candidates, excluded, entity, inputs = _enumerate(spec, core, inputs)
-    kept = []
+    legal = len(candidates)
+    untried = []
     for c in candidates:
         if c.candidate_id in failed:
             excluded.append(Exclusion(c.candidate_id, "failed earlier this turn"))
-        elif c.kind in exclude_kinds:
+        else:
+            untried.append(c)
+    if legal >= 2 and len(untried) < 2:
+        excluded.extend(
+            Exclusion(c.candidate_id, "no untried alternative after earlier failures")
+            for c in untried
+        )
+        return None, excluded
+    kept = []
+    for c in untried:
+        if c.kind in exclude_kinds:
             excluded.append(
                 Exclusion(
                     c.candidate_id,
@@ -135,6 +146,9 @@ def build_decision_point(
             )
         else:
             kept.append(c)
+    forced_rule = None
+    if len(kept) == 1 and len(untried) > 1:
+        forced_rule = "forced_turn_ending_order"
     kept, cut = shortlist(kept, max_options)
     excluded.extend(cut)
     if not kept:
@@ -148,5 +162,7 @@ def build_decision_point(
         candidates=kept,
         context=build_context(spec, core, inputs, memory, objective=objective),
         exclusions=excluded,
+        legal_count=legal,
+        forced_rule=forced_rule,
     )
     return point, excluded

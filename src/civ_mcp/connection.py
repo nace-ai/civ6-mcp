@@ -11,7 +11,9 @@ Wraps tuner_client.py into a stateful connection manager with:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
+from collections.abc import Iterator
 
 from civ_mcp import tuner_client
 from civ_mcp.lua._helpers import SENTINEL
@@ -35,6 +37,19 @@ class GameConnection:
         self.lua_states: dict[int, str] = {}  # index -> name
         self.gamecore_index: int | None = None
         self.ingame_index: int | None = None
+        self._replay_on_disconnect = True
+
+    @contextlib.contextmanager
+    def replay_disabled(self) -> Iterator[None]:
+        """Within this block a command interrupted by a dropped connection is
+        not re-sent after reconnecting; ConnectionError is raised instead, so a
+        mutation that may already have run is never executed twice."""
+        previous = self._replay_on_disconnect
+        self._replay_on_disconnect = False
+        try:
+            yield
+        finally:
+            self._replay_on_disconnect = previous
 
     @property
     def is_connected(self) -> bool:
@@ -148,6 +163,10 @@ class GameConnection:
                 # Dead socket — reconnect once and retry (still holding lock)
                 log.info("Connection lost, reconnecting...")
                 await self.reconnect()
+                if not self._replay_on_disconnect:
+                    raise ConnectionError(
+                        "connection lost during a no-replay command; not re-sent"
+                    )
                 return await self._locked_execute(state_index, lua_code, timeout)
 
     async def _locked_execute(

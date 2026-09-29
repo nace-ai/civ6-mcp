@@ -18,6 +18,7 @@ transport and answer-validation failures share one bound.
 from __future__ import annotations
 
 import json
+import math
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -51,6 +52,10 @@ class DrexAuthError(DrexError):
 
 class DrexRequestRejected(DrexError):
     pass
+
+
+class DrexRequestInvalid(DrexError, ValueError):
+    """The request violates a local limit and was not sent."""
 
 
 class DrexModelMismatch(DrexError):
@@ -120,6 +125,10 @@ class DrexConfig:
         )
 
 
+def _reject_constant(name: str) -> Any:
+    raise DrexProtocolError(f"non-finite JSON constant in response: {name}")
+
+
 def _strict_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for key, value in pairs:
@@ -134,7 +143,9 @@ def parse_choice_response(
 ) -> ChoiceAnswer:
     """Parse and structurally validate a /v1/systemone Choice response."""
     try:
-        doc = json.loads(body, object_pairs_hook=_strict_object)
+        doc = json.loads(
+            body, object_pairs_hook=_strict_object, parse_constant=_reject_constant
+        )
     except DrexProtocolError:
         raise
     except (ValueError, TypeError) as e:
@@ -161,7 +172,9 @@ def parse_choice_response(
         usage = {
             k: int(v)
             for k, v in usage_raw.items()
-            if isinstance(v, (int, float)) and not isinstance(v, bool)
+            if isinstance(v, (int, float))
+            and not isinstance(v, bool)
+            and math.isfinite(v)
         }
     model = doc.get("model")
     return ChoiceAnswer(
@@ -221,14 +234,14 @@ class DrexClient:
 
     def _check_request(self, state: Any, options: Mapping[str, Any]) -> None:
         if len(options) < 2:
-            raise ValueError("a Choice needs at least 2 options")
+            raise DrexRequestInvalid("a Choice needs at least 2 options")
         if len(options) > self.config.max_options:
-            raise ValueError(
+            raise DrexRequestInvalid(
                 f"{len(options)} options exceed the limit of {self.config.max_options}"
             )
         size = len(json.dumps(state, default=str))
         if size > self.config.max_state_chars:
-            raise ValueError(
+            raise DrexRequestInvalid(
                 f"state is {size} chars, over the {self.config.max_state_chars} budget"
             )
 
@@ -257,7 +270,7 @@ class DrexClient:
             response = await self._http.post("/v1/systemone", json=payload)
         except httpx.TimeoutException as e:
             raise DrexUnavailable(f"timeout after {self.config.timeout_s}s") from e
-        except httpx.TransportError as e:
+        except httpx.HTTPError as e:
             raise DrexUnavailable(f"transport error: {type(e).__name__}") from e
         latency_ms = (time.perf_counter() - started) * 1000.0
 

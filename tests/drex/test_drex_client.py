@@ -239,3 +239,29 @@ def test_list_models_uses_get_endpoint():
 
     assert asyncio.run(go()) == [{"name": "drex-latest"}]
     assert seen == {"method": "GET", "url": "https://drex.nace.ai/v1/models"}
+
+
+def test_non_finite_json_constants_are_rejected():
+    raw = (
+        b'{"model":"drex-1.1","answers":{"decision":{"type":"choice","choice":"Pottery",'
+        b'"probabilities":{"Pottery":NaN,"Mining":0.3},"confidence":0.4}},'
+        b'"usage":{"input_tokens":Infinity}}'
+    )
+    with pytest.raises(DrexProtocolError):
+        _choose(_client(lambda r: httpx.Response(200, content=raw)))
+
+
+def test_body_decoding_failure_is_retryable():
+    def handler(request):
+        raise httpx.DecodingError("bad gzip", request=request)
+
+    with pytest.raises(DrexUnavailable):
+        _choose(_client(handler))
+
+
+def test_invalid_request_is_a_non_retryable_drex_error():
+    from civ_mcp.drex.client import DrexRequestInvalid
+
+    with pytest.raises(DrexRequestInvalid) as exc:
+        _choose(_client(lambda r: httpx.Response(200, json=_ok_body())), {"A": None})
+    assert exc.value.retryable is False

@@ -88,11 +88,6 @@ class DrexSelector:
             try:
                 answer = await self._client.choose(**request)
                 decision = resolve_choice(point, answer, selector=self.name)
-            except ValueError as e:
-                attempts.append(
-                    {"attempt": n + 1, "ok": False, "error": f"request: {e}"}
-                )
-                raise SelectionPaused(f"request refused before sending: {e}", attempts)
             except DecisionError as e:
                 attempts.append(
                     {"attempt": n + 1, "ok": False, "error": f"answer: {e}"}
@@ -165,5 +160,10 @@ class ReplaySelector:
 
 async def select(point: DecisionPoint, selector: Selector) -> SelectionResult:
     if len(point.candidates) == 1:
+        if point.forced_rule is None:
+            raise SelectionPaused(
+                f"{point.decision_id}: one candidate left after controller filtering "
+                f"of {point.legal_count} legal options; not executed without a choice"
+            )
         return SelectionResult(forced_decision(point))
     return await selector.choose(point)

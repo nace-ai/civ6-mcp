@@ -105,7 +105,8 @@ if moves > 0 then
 end
 
 local cs = info and info.Combat or 0
-local rs = info and info.RangedCombat or 0
+-- Siege units attack with Bombard strength through RANGE_ATTACK.
+local rs = math.max(info and info.RangedCombat or 0, info and info.Bombard or 0)
 if moves > 0 and not civilian and (cs > 0 or rs > 0) then
     local rng = 1
     if rs > 0 then rng = math.max(1, info.Range or 1) end

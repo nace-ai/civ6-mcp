@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import time
 from collections.abc import Awaitable, Callable
@@ -24,6 +25,7 @@ DEFAULT_OBJECTIVE = (
     "Develop the empire: found cities on good land, keep every city producing, "
     "research steadily, and keep units and cities safe."
 )
+INTERRUPTION_KEY = "end_turn_interrupted"
 
 
 @dataclass
@@ -36,8 +38,8 @@ class RunConfig:
     max_unit_decisions: int = 3
     max_decisions_per_turn: int = 80
     max_failures_per_key: int = 2
-    max_blocked_end_turns: int = 2
     max_session_close_attempts: int = 2
+    max_interruptions_per_turn: int = 2
 
 
 @dataclass
@@ -58,6 +60,15 @@ async def _default_checkpoint(gs: Any, turn: int) -> str:
     name = f"DREX_CHECKPOINT_T{turn:04d}"
     await save_game(gs.conn, name)
     return name
+
+
+def _describe_block(outcome: EndTurnOutcome) -> str:
+    what = [b[0] for b in outcome.blockers]
+    what += [f"diplomacy_player_{p}" for p in outcome.diplomacy_pending]
+    what += [f"deal_player_{p}" for p in outcome.deals_pending]
+    if outcome.world_congress_pending:
+        what.append("world_congress")
+    return ",".join(what) or outcome.status
 
 
 class Runner:
@@ -99,15 +110,33 @@ class Runner:
         self._api_ms = 0.0
         self._game_ms = 0.0
         self._t0 = time.perf_counter()
+        self._last_core: CoreObservation | None = None
 
-    async def _observe(self) -> CoreObservation:
+    async def _observe(
+        self, *, reactive_from: CoreObservation | None = None
+    ) -> CoreObservation:
         t0 = time.perf_counter()
-        core = await self.observer.core()
+        if reactive_from is not None:
+            core = await self.observer.reactive(reactive_from)
+        else:
+            core = await self.observer.core()
         self._game_ms += (time.perf_counter() - t0) * 1000.0
+        self._last_core = core
         return core
 
     async def run(self) -> RunResult:
         self._t0 = time.perf_counter()
+        try:
+            return await self._run()
+        except asyncio.CancelledError:
+            self._write_stop(self._result("interrupted", self._last_core, None))
+            raise
+        except Exception as e:
+            return await self._stop(
+                f"error:{type(e).__name__}: {e}", self._last_core, checkpoint=True
+            )
+
+    async def _run(self) -> RunResult:
         core = await self._observe()
         identity = core.game_identity
         self.memory.bind_game(identity)
@@ -128,8 +157,14 @@ class Runner:
             },
         )
         ledger = TurnLedger(turn=core.turn)
-        blocked_streak = 0
         close_attempts: dict[tuple[int, int], int] = {}
+        # An end-turn request the game is still processing (AI turn paused on
+        # a proposal): only sessions and deals are observed until it resumes.
+        in_flight = False
+        # The last blocked end turn, cleared by any decision or housekeeping.
+        # Ending the turn again with nothing changed would be a blind retry.
+        blocked: EndTurnOutcome | None = None
+        retry_allowed = False
 
         while True:
             if self._turns >= self.cfg.turns:
@@ -140,7 +175,7 @@ class Runner:
                 ledger = TurnLedger(turn=core.turn)
 
             informational = self.scheduler.informational_sessions(core)
-            if informational:
+            if informational and not self.cfg.dry_run:
                 for pid in informational:
                     n = close_attempts.get((core.turn, pid), 0) + 1
                     close_attempts[(core.turn, pid)] = n
@@ -160,31 +195,54 @@ class Runner:
                             "raw": raw,
                         },
                     )
-                core = await self._observe()
+                blocked = None
+                core = await self._observe(reactive_from=core if in_flight else None)
                 continue
+            if informational:
+                self.log.write(
+                    "housekeeping_planned",
+                    {
+                        "turn": core.turn,
+                        "action": "close_informational_sessions",
+                        "players": informational,
+                    },
+                )
 
-            step = self.scheduler.next(core, ledger)
+            step = (
+                self.scheduler.next_reactive(core, ledger) or EndTurn()
+                if in_flight
+                else self.scheduler.next(core, ledger)
+            )
             if isinstance(step, Stop):
                 return await self._stop(step.reason, core, checkpoint=True)
 
             if isinstance(step, EndTurn):
-                unsupported = self.scheduler.unsupported_blockers(core)
-                if unsupported:
+                if not in_flight:
+                    unsupported = self.scheduler.unsupported_blockers(core)
+                    if unsupported:
+                        return await self._stop(
+                            "unsupported_blocker:" + ",".join(unsupported),
+                            core,
+                            checkpoint=True,
+                        )
+                if self.cfg.dry_run:
+                    return await self._stop("dry_run_complete", core, checkpoint=False)
+                if blocked is not None and not retry_allowed:
                     return await self._stop(
-                        "unsupported_blocker:" + ",".join(unsupported),
+                        f"end_turn_{blocked.status}:{_describe_block(blocked)}",
                         core,
                         checkpoint=True,
                     )
-                if self.cfg.dry_run:
-                    return await self._stop("dry_run_complete", core, checkpoint=False)
+                retry_allowed = False
                 t0 = time.perf_counter()
                 outcome = await self._end_turn(self.gs)
                 elapsed = (time.perf_counter() - t0) * 1000.0
                 self._game_ms += elapsed
                 self._log_turn(outcome, elapsed)
+                in_flight = outcome.status == "blocked" and outcome.end_turn_in_flight
                 if outcome.status == "advanced":
                     self._turns += 1
-                    blocked_streak = 0
+                    blocked = None
                     self.memory.record(
                         Fact(
                             outcome.turn_before or core.turn,
@@ -195,25 +253,25 @@ class Runner:
                         )
                     )
                 elif outcome.status == "blocked":
-                    blocked_streak += 1
-                    if blocked_streak >= self.cfg.max_blocked_end_turns:
-                        what = [b[0] for b in outcome.blockers]
-                        what += [
-                            f"diplomacy_player_{p}" for p in outcome.diplomacy_pending
-                        ]
-                        what += [f"deal_player_{p}" for p in outcome.deals_pending]
-                        if outcome.world_congress_pending:
-                            what.append("world_congress")
+                    if outcome.world_congress_pending:
                         return await self._stop(
-                            "end_turn_blocked:" + ",".join(what), core, checkpoint=True
+                            "unsupported_blocker:world_congress", core, checkpoint=True
                         )
+                    blocked = outcome
+                elif outcome.status == "interrupted":
+                    ledger.counts[INTERRUPTION_KEY] += 1
+                    blocked = outcome
+                    retry_allowed = (
+                        ledger.counts[INTERRUPTION_KEY]
+                        <= self.cfg.max_interruptions_per_turn
+                    )
                 elif outcome.status == "game_over":
                     return await self._stop("game_over", core, checkpoint=False)
                 else:
                     return await self._stop(
                         f"end_turn_{outcome.status}", core, checkpoint=True
                     )
-                core = await self._observe()
+                core = await self._observe(reactive_from=core if in_flight else None)
                 continue
 
             inputs = await self.observer.inputs(step, core)
@@ -309,7 +367,7 @@ class Runner:
             )
             self._game_ms += outcome.elapsed_ms
             self._decisions += 1
-            blocked_streak = 0
+            blocked = None
             self.scheduler.note(
                 ledger, step, candidate.kind, outcome, candidate.candidate_id
             )
@@ -338,7 +396,7 @@ class Runner:
                     },
                 },
             )
-            core = await self._observe()
+            core = await self._observe(reactive_from=core if in_flight else None)
 
     def _log_turn(self, outcome: EndTurnOutcome, elapsed_ms: float) -> None:
         self.log.write(
@@ -361,23 +419,19 @@ class Runner:
             },
         )
 
-    async def _stop(
-        self, reason: str, core: CoreObservation | None, *, checkpoint: bool
+    def _result(
+        self, reason: str, core: CoreObservation | None, checkpoint: str | None
     ) -> RunResult:
-        name = None
-        if checkpoint and not self.cfg.dry_run and core is not None:
-            try:
-                name = await self._checkpoint(self.gs, core.turn)
-            except Exception as e:
-                name = f"checkpoint_failed:{type(e).__name__}"
-        result = RunResult(
+        return RunResult(
             stop_reason=reason,
             turns_advanced=self._turns,
             decisions=self._decisions,
             start_turn=self._start_turn,
             final_turn=core.turn if core else None,
-            checkpoint=name,
+            checkpoint=checkpoint,
         )
+
+    def _write_stop(self, result: RunResult) -> None:
         self.log.write(
             "stop",
             {
@@ -387,4 +441,16 @@ class Runner:
                 "wall_ms": round((time.perf_counter() - self._t0) * 1000.0, 1),
             },
         )
+
+    async def _stop(
+        self, reason: str, core: CoreObservation | None, *, checkpoint: bool
+    ) -> RunResult:
+        name = None
+        if checkpoint and not self.cfg.dry_run and core is not None:
+            try:
+                name = await self._checkpoint(self.gs, core.turn)
+            except Exception as e:
+                name = f"checkpoint_failed:{type(e).__name__}"
+        result = self._result(reason, core, name)
+        self._write_stop(result)
         return result

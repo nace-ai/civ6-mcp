@@ -670,7 +670,15 @@ for i = 0, 62 do
                         elseif subType == DealAgreementTypes.ALLIANCE then
                             local aNames = {"Research","Cultural","Economic","Military","Religious"}
                             itemName = (valueType >= 0 and valueType < 5 and aNames[valueType+1] or "Unknown") .. " Alliance"
-                        else itemName = "" end
+                        else
+                            -- Name other agreements (e.g. a peace treaty) instead of dropping them
+                            itemName = "Agreement"
+                            pcall(function()
+                                for k, v in pairs(DealAgreementTypes) do
+                                    if v == subType then itemName = "Agreement: " .. k; break end
+                                end
+                            end)
+                        end
                     elseif iType == DealItemTypes.FAVOR then
                         typeName = "FAVOR"
                         itemName = "Diplomatic Favor"

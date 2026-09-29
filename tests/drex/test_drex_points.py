@@ -163,3 +163,50 @@ def test_envoy_point():
     )
     assert set(point.label_to_id) == {"Kabul", "Geneva"}
     assert dataclasses.is_dataclass(point)
+
+
+def test_failure_leaving_one_alternative_never_forces_it():
+    point, excluded = _build(
+        DecisionSpec(DecisionCategory.DEAL, "player:1"),
+        DecisionInputs(deal=fx.deal()),
+        failed=frozenset({"deal:1:reject"}),
+    )
+    assert point is None
+    assert any("no untried alternative" in e.reason for e in excluded)
+
+
+def test_only_legal_option_is_marked_forced_single():
+    status = fx.tech_status()
+    status.available_techs = status.available_techs[:1]
+    core = _core()
+    core.tech = status
+    point, _ = build_decision_point(
+        DecisionSpec(DecisionCategory.RESEARCH, "empire"),
+        core,
+        DecisionInputs(),
+        DecisionMemory(),
+        objective="Grow.",
+        decision_id="T5#0004",
+        max_options=255,
+    )
+    assert point.legal_count == 1
+    assert point.forced_rule == "forced_single_candidate"
+
+
+def test_turn_ending_rule_leaving_one_order_is_labeled_as_such():
+    from civ_mcp.drex.candidates import ActionKind
+
+    space = fx.warrior_space(fortify_turns=2)
+    space.targets = []
+    point, _ = build_decision_point(
+        DecisionSpec(DecisionCategory.UNIT, f"unit:{fx.WARRIOR_ID}"),
+        _core(),
+        DecisionInputs(unit=fx.warrior(), action_space=space),
+        DecisionMemory(),
+        objective="Grow.",
+        decision_id="T5#0005",
+        max_options=255,
+        exclude_kinds=frozenset({ActionKind.MOVE_UNIT}),
+    )
+    assert [c.kind for c in point.candidates] == [ActionKind.SKIP_UNIT]
+    assert point.forced_rule == "forced_turn_ending_order"

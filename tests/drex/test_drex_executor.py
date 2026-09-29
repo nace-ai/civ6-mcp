@@ -318,3 +318,82 @@ def test_outcome_record_is_serializable():
     game = FakeGame()
     outcome = _run(game, research_candidates(fx.tech_status())[0])
     json.dumps(outcome.to_record())
+
+
+def test_refused_attack_in_real_result_format_is_rejected():
+    game = FakeGame()
+    game.attack_refused = True
+    cand = _cand(_units(fx.warrior_space(), fx.warrior()), ActionKind.ATTACK)
+    outcome = _run(game, cand)
+    assert outcome.status is OutcomeStatus.REJECTED
+
+
+def test_second_envoy_to_same_city_state_is_a_new_action():
+    game = FakeGame()
+    game.envoy_status.tokens_available = 2
+    cand = _cand(
+        envoy_candidates(fx.envoys()),
+        ActionKind.SEND_ENVOY,
+        lambda c: c.params.city_state_player_id == 20,
+    )
+    ex = Executor(game, sleep=_no_sleep, poll_attempts=1)
+    assert _run(game, cand, executor=ex).status is OutcomeStatus.CONFIRMED
+    assert _run(game, cand, executor=ex).status is OutcomeStatus.CONFIRMED
+    assert [m for m, _ in game.calls] == ["send_envoy", "send_envoy"]
+
+
+def test_same_reply_in_a_new_dialogue_round_is_dispatched_but_not_repeated_in_one():
+    game = FakeGame()
+    game.sessions = [fx.session()]
+    game.session_rounds[1] = 3
+    cand = _cand(
+        diplomacy_candidates(fx.session()),
+        ActionKind.DIPLOMACY_RESPOND,
+        lambda c: c.params.response == "POSITIVE",
+    )
+    ex = Executor(game, sleep=_no_sleep, poll_attempts=1)
+    assert _run(game, cand, executor=ex).dispatched
+    assert _run(game, cand, executor=ex).dispatched
+    game.ignore.add("diplomacy_respond")
+    game.sessions[0].dialogue_text = "frozen"
+    game.session_rounds[1] = 5
+
+    async def no_change(pid, response):
+        game.calls.append(("diplomacy_respond", (pid, response)))
+        return "OK:RESPONDED|POSITIVE|SESSION_CONTINUES"
+
+    game.diplomacy_respond = no_change
+    _run(game, cand, executor=ex)
+    again = _run(game, cand, executor=ex)
+    assert again.reason == "already_dispatched_this_turn"
+
+
+def test_dispatch_runs_with_connection_replay_disabled():
+    game = FakeGame()
+    _run(game, research_candidates(fx.tech_status())[0])
+    assert game.replay_at_call == [False]
+    assert game.conn.replay_on_disconnect is True
+
+
+def test_policy_confirmation_is_polled_not_read_once():
+    game = FakeGame()
+    original = game.get_policies
+    reads = {"n": 0}
+
+    async def lagging():
+        reads["n"] += 1
+        status = await original()
+        if reads["n"] == 2:
+            for s in status.slots:
+                if s.slot_index == 1:
+                    s.current_policy = None
+        return status
+
+    game.get_policies = lagging
+    cand = _cand(
+        policy_candidates(fx.policies(), fx.policies().slots[1]), ActionKind.SET_POLICY
+    )
+    outcome = _run(
+        game, cand, executor=Executor(game, sleep=_no_sleep, poll_attempts=3)
+    )
+    assert outcome.status is OutcomeStatus.CONFIRMED

@@ -304,6 +304,11 @@ class DecisionPoint:
     candidates: tuple[Candidate, ...]
     context: Mapping[str, Any] = field(default_factory=dict, compare=False, hash=False)
     exclusions: tuple[Exclusion, ...] = ()
+    # Legal candidates the engine offered before controller filtering; a
+    # single remaining candidate may be executed without a selector only
+    # under ``forced_rule``.
+    legal_count: int = 0
+    forced_rule: str | None = None
 
     @classmethod
     def create(
@@ -317,6 +322,8 @@ class DecisionPoint:
         candidates: list[Candidate] | tuple[Candidate, ...],
         context: Mapping[str, Any],
         exclusions: list[Exclusion] | tuple[Exclusion, ...] = (),
+        legal_count: int | None = None,
+        forced_rule: str | None = None,
     ) -> DecisionPoint:
         if not candidates:
             raise ValueError(f"decision {decision_id} has no candidates")
@@ -325,6 +332,9 @@ class DecisionPoint:
         dupes = sorted(i for i, n in Counter(ids).items() if n > 1)
         if dupes:
             raise ValueError(f"duplicate candidate ids: {dupes}")
+        legal = len(ordered) if legal_count is None else legal_count
+        if forced_rule is None and len(ordered) == 1 and legal == 1:
+            forced_rule = "forced_single_candidate"
         return cls(
             decision_id=decision_id,
             category=category,
@@ -334,6 +344,8 @@ class DecisionPoint:
             candidates=tuple(_unique_labels(ordered)),
             context=dict(context),
             exclusions=tuple(exclusions),
+            legal_count=legal,
+            forced_rule=forced_rule,
         )
 
     @property
@@ -355,6 +367,8 @@ class DecisionPoint:
             "question": self.question,
             "candidates": [c.to_record() for c in self.candidates],
             "exclusions": [dataclasses.asdict(e) for e in self.exclusions],
+            "legal_count": self.legal_count,
+            "forced_rule": self.forced_rule,
         }
 
 

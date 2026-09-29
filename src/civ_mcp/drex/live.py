@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from typing import Any
 
 from civ_mcp.drex.candidates import DecisionCategory
@@ -53,6 +54,22 @@ class LiveObserver:
             diplomacy_sessions=sessions,
             pending_deals=deals,
             blockers=[Blocker(t, m) for t, m in blockers],
+        )
+
+    async def reactive(self, previous: CoreObservation) -> CoreObservation:
+        """Refresh only sessions and deals, e.g. while an end turn is in flight
+        and the AI is still processing (heavier queries risk stalling it)."""
+        sessions = await self.gs.get_diplomacy_sessions()
+        deals = await self.gs.get_pending_deals()
+        self._counter += 1
+        self._version = (
+            f"{previous.civ}:{previous.seed}:T{previous.turn}:{self._counter}"
+        )
+        return dataclasses.replace(
+            previous,
+            version=self._version,
+            diplomacy_sessions=sessions,
+            pending_deals=deals,
         )
 
     async def _wonder_types(self, identity: tuple[str, int]) -> set[str]:

@@ -150,21 +150,24 @@ def visible_tiles(tiles: list[lq.TileInfo], *, me: int) -> list[dict[str, Any]]:
             "visibility": t.visibility,
             "terrain": pretty(t.terrain),
         }
-        if t.feature:
-            tile["feature"] = pretty(t.feature)
         if t.resource:
             tile["resource"] = pretty(t.resource)
         if t.is_hills:
             tile["hills"] = True
         if t.is_river:
             tile["river"] = True
-        if t.improvement:
-            tile["improvement"] = pretty(t.improvement)
-        if t.district:
-            tile["district"] = pretty(t.district)
         if t.own_units:
             tile["own_units"] = list(t.own_units)
+        # The map query reports current feature/improvement/district even
+        # for fogged tiles, not what the player last saw, so they are only
+        # shown for tiles that are visible now.
         if t.visibility == "visible":
+            if t.feature:
+                tile["feature"] = pretty(t.feature)
+            if t.improvement:
+                tile["improvement"] = pretty(t.improvement)
+            if t.district:
+                tile["district"] = pretty(t.district)
             if t.owner_id == me:
                 tile["owner"] = "yours"
             elif t.owner_id >= 0:

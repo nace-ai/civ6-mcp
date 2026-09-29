@@ -167,6 +167,9 @@ async def _run_live(args: argparse.Namespace, *, dry_run: bool) -> int:
     except ConnectionError as e:
         _err(f"game connection failed: {e}")
         return 2
+    except Exception as e:
+        _err(f"run failed: {type(e).__name__}: {e} (log: {log_path})")
+        return 3
     finally:
         if client is not None:
             await client.aclose()
@@ -265,6 +268,9 @@ async def _probe(args: argparse.Namespace) -> int:
     except ConnectionError as e:
         _err(f"game connection failed: {e}")
         return 2
+    except Exception as e:
+        _err(f"probe failed: {type(e).__name__}: {e}")
+        return 3
     finally:
         await conn.disconnect()
     _print(report)

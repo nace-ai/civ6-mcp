@@ -53,6 +53,8 @@ def _housekeeping(gs: GameState, action: str, detail: str = "") -> None:
     records = getattr(gs, "end_turn_housekeeping", None)
     if records is not None:
         records.append({"action": action, "detail": detail})
+        if len(records) > 200:
+            del records[:-200]
 
 
 async def _check_mid_turn_diplomacy(
@@ -84,6 +86,19 @@ async def _check_mid_turn_diplomacy(
         # Auto-dismiss war declarations — these are informational only
         # (you can't decline a war). Dismiss and report to the agent.
         war_sessions = [s for s in mid_sessions if s.is_at_war]
+        if war_sessions and _decision_only(gs):
+            # is_at_war describes the relationship, not the session: a session
+            # from an at-war player that carries a deal (e.g. a peace offer)
+            # is a decision, so only deal-free sessions are dismissed.
+            try:
+                deal_players = {d.other_player_id for d in await gs.get_pending_deals()}
+            except Exception:
+                deal_players = {s.other_player_id for s in war_sessions}
+            war_sessions = [
+                s
+                for s in war_sessions
+                if not s.deal_summary and s.other_player_id not in deal_players
+            ]
         if war_sessions:
             war_names = []
             for ws in war_sessions:
@@ -91,8 +106,9 @@ async def _check_mid_turn_diplomacy(
                 await gs.conn.execute_write(close_lua)
                 war_names.append(f"{ws.other_civ_name} ({ws.other_leader_name})")
                 _housekeeping(gs, "war_declaration_dismissed", ws.other_civ_name)
-            # Remove war sessions from the list
-            mid_sessions = [s for s in mid_sessions if not s.is_at_war]
+            # Remove the dismissed sessions from the list
+            dismissed = {s.other_player_id for s in war_sessions}
+            mid_sessions = [s for s in mid_sessions if s.other_player_id not in dismissed]
             # If only war sessions, resume polling (original ACTION_ENDTURN
             # is still in flight — do NOT re-send or turns will skip)
             if not mid_sessions:
@@ -606,7 +622,9 @@ async def execute_end_turn(gs: GameState) -> str:
                     f'print("{lq.SENTINEL}")'
                 )
                 handler_set = any("HANDLER_SET" in l for l in handler_lines)
-                if not handler_set:
+                # The handler global outlives the connection, so in decision-only
+                # mode a vote queued by an earlier session must not pass silently.
+                if not handler_set or _decision_only(gs):
                     return (
                         f"World Congress fires this turn ({n_res} resolution(s), {wc_status.favor} favor). "
                         f"Use get_world_congress() to review resolutions and targets, "
@@ -1344,7 +1362,10 @@ async def execute_end_turn(gs: GameState) -> str:
             dismissed = await gs.dismiss_popup()
             if "Dismissed" in dismissed:
                 _housekeeping(gs, "popup_dismissed_after_timeout", dismissed)
-                await gs.conn.execute_write(lua)
+                # Re-sending could double an end turn the game is still
+                # processing; decision-only mode only watches for the advance.
+                if not _decision_only(gs):
+                    await gs.conn.execute_write(lua)
                 for _ in range(5):
                     await asyncio.sleep(2.0)
                     turn_after = await _get_turn_number(gs)
@@ -1675,8 +1696,10 @@ async def execute_end_turn(gs: GameState) -> str:
 class EndTurnOutcome:
     """Typed end-turn result derived from observable state, not report text.
 
-    status: "advanced", "blocked", "game_over", "aborted", or "not_advanced"
-    (no advance and nothing observable blocking, e.g. an AI-turn hang).
+    status: "advanced", "blocked", "game_over", "aborted", "interrupted" (a
+    war declaration consumed the end-turn request; ending the turn again is
+    the recovery), or "not_advanced" (nothing observable blocking, e.g. an
+    AI-turn hang).
     ``report`` is the legacy narration, kept for logs only.
     """
 
@@ -1748,8 +1771,15 @@ async def execute_end_turn_typed(
     except Exception:
         log.debug("Typed outcome: congress query failed", exc_info=True)
     blocked = bool(sessions or deals or blockers or wc_pending)
+    war_declared = any(h.get("action") == "war_declaration_dismissed" for h in housekeeping)
+    if blocked:
+        status = "blocked"
+    elif war_declared:
+        status = "interrupted"
+    else:
+        status = "not_advanced"
     return EndTurnOutcome(
-        status="blocked" if blocked else "not_advanced",
+        status=status,
         blockers=blockers,
         diplomacy_pending=[s.other_player_id for s in sessions],
         deals_pending=[d.other_player_id for d in deals],

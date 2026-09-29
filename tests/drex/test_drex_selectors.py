@@ -145,3 +145,34 @@ def test_replay_revalidates_recorded_answers():
         asyncio.run(ReplaySelector({"T3#2": MISSING_OPTION}).choose(_point()))
     with pytest.raises(SelectionPaused):
         asyncio.run(ReplaySelector({}).choose(_point()))
+
+
+def test_single_candidate_left_by_filtering_is_not_forced():
+    from civ_mcp.drex.candidates import DecisionPoint
+
+    point = _point(("TECHNOLOGY_POTTERY",))
+    point = DecisionPoint.create(
+        decision_id=point.decision_id,
+        category=point.category,
+        entity=point.entity,
+        observation_version=point.observation_version,
+        question=point.question,
+        candidates=list(point.candidates),
+        context={},
+        legal_count=2,
+    )
+    client = _ScriptedClient()
+    with pytest.raises(SelectionPaused):
+        asyncio.run(select(point, _drex(client)))
+    assert client.calls == []
+
+
+def test_invalid_request_pauses_without_retry():
+    from civ_mcp.drex.client import DrexRequestInvalid
+
+    client = _ScriptedClient(
+        DrexRequestInvalid("256 options exceed the limit of 255"), GOOD
+    )
+    with pytest.raises(SelectionPaused):
+        asyncio.run(_drex(client).choose(_point()))
+    assert len(client.calls) == 1

@@ -163,14 +163,14 @@ def validate_selection(
 
 
 def forced_decision(point: DecisionPoint) -> Decision:
-    """The controller's only legal option; no selector is consulted."""
-    if len(point.candidates) != 1:
-        raise ValueError("forced decisions require exactly one candidate")
+    """Execute the only remaining option under the point's documented rule."""
+    if len(point.candidates) != 1 or point.forced_rule is None:
+        raise ValueError("forced decisions require one candidate and a forced_rule")
     return validate_selection(
         point,
         point.candidates[0].candidate_id,
         selector="controller",
-        rule="forced_single_candidate",
+        rule=point.forced_rule,
     )
 
 
