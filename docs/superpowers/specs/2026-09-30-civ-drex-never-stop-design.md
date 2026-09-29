@@ -16,15 +16,21 @@ The run must also be fast enough to watch comfortably: a decision in about one
 second of wall time excluding the Drex call, and a full turn in well under 20
 seconds excluding the AI players' own turn processing.
 
-### Non-goals
+### Scope: every case the game can raise
 
-- Gold purchases, unit upgrades, espionage missions, city ranged attacks,
-  religious unit actions (spread, inquisition) and trade route re-plotting are
-  not added. None of them blocks end turn; the game never forces them. They can
-  be added later as ordinary decision kinds without changing this design.
-- No generative model anywhere. Option labels and context stay fixed templates.
-- No change to what Drex is shown per decision beyond the new decision kinds'
-  own subjects (Section 4 keeps the current visibility filtering).
+"All Civ 6 cases" is defined by the engine, not by hand: every member of the
+engine's `EndTurnBlockingTypes` enum must be classified as a Drex decision kind
+or as housekeeping (Section 4, coverage matrix), and a test fails if a member is
+unclassified. Forced choices that arrive as diplomacy sessions or popups are
+covered by the existing session and deal decisions plus the popup watcher.
+
+Decisions the game never forces (gold purchases, unit upgrades, espionage
+missions, religious unit actions, trade route re-plotting, city projects while a
+queue is non-empty) are not needed to reach game over and are Phase 5, after
+everything forced is done. They follow the same decision-kind pattern.
+
+Still out of scope: any generative model anywhere, and any change to the
+visibility filtering of what Drex is shown.
 
 ### Observed failures this design removes
 
@@ -142,6 +148,38 @@ methods below exist today unless marked **new**.
 | District placement | production for empty queue | for each buildable district: top 3 tiles from `get_district_advisor(city, district)` | `set_city_production(city, "DISTRICT", type, x, y)` | queue readback |
 | Wonder placement | production for empty queue | for each buildable wonder: top 3 tiles from `get_wonder_advisor` | `set_city_production(city, "BUILDING", type, x, y)` | queue readback |
 | Trade route | unit decision for idle trader | reachable destination cities from `get_trade_routes` and the engine's destination list | `make_trade_route(unit_index, x, y)` | route active for that trader |
+
+### Blocker coverage matrix
+
+Source: `ActionPanel.lua` and `NotificationPanel.lua` in the installed game
+(Base, Expansion1, Expansion2), read 2026-09-30. Truncated names in some data
+files are artifacts of a 32-character field; the full names are listed.
+
+| `EndTurnBlockingTypes` member | Handling |
+|---|---|
+| `UNITS`, `UNIT_NEEDS_ORDERS`, `STACKED_UNITS` | unit decisions (existing) |
+| `PRODUCTION` | production decision (existing), plus districts and wonders |
+| `RESEARCH`, `CIVIC` | research and civic decisions (existing) |
+| `FILL_CIVIC_SLOT` | policy decision (existing) |
+| `CONSIDER_GOVERNMENT_CHANGE` | government decision (existing) |
+| `GIVE_INFLUENCE_TOKEN` | envoy decision (existing) |
+| `PANTHEON` | pantheon decision (existing) |
+| `RELIGION` | religion founding, three-step decision |
+| `BELIEF` | **new** add-belief decision: `get_religion_founding_status().beliefs_by_class` for the class the engine asks for, dispatched through a new `add_belief(belief_type)` wrapping the engine's `AddBelief` request |
+| `UNIT_PROMOTION` | unit promotion decision |
+| `GOVERNOR_APPOINTMENT`, `GOVERNOR_IDLE`, `GOVERNOR_OPPORTUNITY`, `GOVERNOR_PROMOTION` | governor appoint, assign and promote decisions; the engine's type selects which one is offered first |
+| `COMMEMORATION_AVAILABLE` | era dedication decision |
+| `CLAIM_GREAT_PERSON` | Great Person decision, blocker-driven; the "wait" option is dropped when the engine forces a claim and only recruit or patronize candidates remain, so at least two are offered whenever more than one person is claimable, otherwise `forced_single_candidate` |
+| `CONSIDER_RAZE_CITY` | captured city decision |
+| `CONSIDER_DISLOYAL_CITY` | disloyal city decision |
+| `SPY_CHOOSE_ESCAPE_ROUTE` | spy escape decision |
+| `SPY_CHOOSE_DRAGNET_PRIORITY` | **new** dragnet decision: engine's priority list via new `get_spy_dragnet_options()` and `choose_spy_dragnet(index)` |
+| `ARTIFACT` | **new** artifact decision: the engine's list of artifact origins for the freshly excavated site via new `get_artifact_choices()` and `choose_artifact(index)` |
+| `EMERGENCY_NEEDS_ATTENTION` | **new** emergency decision: join or decline each pending emergency via new `get_emergencies()` and `respond_emergency(id, join)` |
+| `CITY_RANGE_ATTACK`, `DISTRICT_RANGE_ATTACK` | **new** city attack decision: visible hostile targets in range from the existing `city_attack` Lua plus one "hold fire" option; dispatched through existing `city_attack(city_id, x, y)` |
+| `WORLD_CONGRESS_SESSION`, `WORLD_CONGRESS_SPECIAL_SESSION` | World Congress vote and submit decisions; special sessions use the same resolution list |
+| `WORLD_CONGRESS_LOOK` | housekeeping (existing) |
+| any member not in this table | test failure in `tests/drex/test_blocker_coverage.py`, which reads the enum from the live game via `civ-drex probe --blockers` output stored as a fixture |
 
 Notes:
 
@@ -273,6 +311,11 @@ compared against the targets above.
   `game_over` and `turn_budget_reached`.
 - Speed: unit tests count fake-connection round trips per decision and assert
   the C1 to C5 budgets (at most three per decision, two per full observation).
+- Coverage: `civ-drex probe --blockers` dumps the engine's
+  `EndTurnBlockingTypes` table from the live game; the dump is committed as a
+  fixture and `test_blocker_coverage.py` asserts every member is mapped in the
+  scheduler to a decision category or to housekeeping. A new game build that
+  adds a type fails the test rather than stopping a run.
 - Live checks before relying on any new query: `civ-drex probe` gains a
   `--kind <name>` flag that runs the new query read-only against the loaded
   save and prints the parsed result, mirroring how the current action space
@@ -287,11 +330,17 @@ turn.
 1. **Resilience and speed** (A1, A2, A3, A4, C1 to C8). Ends the stops that
    actually happened, and gets turns under the target.
 2. **Early-game blockers**: unit promotion, governors, dedication, Great
-   People, religion. These are what the game raises first, around turns 20 to
-   60.
+   People (including forced claims), religion and beliefs, city and district
+   ranged attacks. These are what the game raises first, around turns 20 to
+   60. Also the blocker coverage test, so every later phase is measured against
+   the engine's list.
 3. **Growth**: district and wonder placement, trade routes. Without these Rome
    never builds a Campus.
-4. **Late and rare**: World Congress, captured and disloyal cities, spy escape.
+4. **Late and rare**: World Congress including special sessions, emergencies,
+   captured and disloyal cities, spy escape and dragnet, artifacts.
+5. **Unforced but useful**: gold purchases, unit upgrades, espionage missions,
+   religious unit actions, trade route re-plotting. Same pattern, no new
+   infrastructure.
 
 ## 9. External dependency: the Drex service
 
