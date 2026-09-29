@@ -22,6 +22,7 @@ from civ_mcp.drex.enumerate import (
     pantheon_candidates,
     policy_candidates,
     production_candidates,
+    promotion_candidates,
     research_candidates,
     unit_candidates,
 )
@@ -180,6 +181,16 @@ DISPATCH_CASES.append(
         ("heal_unit", (fx.WARRIOR_IDX,)),
     )
 )
+DISPATCH_CASES.append(
+    (
+        _cand(
+            promotion_candidates(fx.promotable_warrior(), fx.warrior_promotions()),
+            ActionKind.PROMOTE_UNIT,
+            lambda c: c.params.promotion_type == "PROMOTION_BATTLECRY",
+        ),
+        ("promote_unit", (fx.WARRIOR_ID, "PROMOTION_BATTLECRY")),
+    )
+)
 
 
 @pytest.mark.parametrize(
@@ -200,7 +211,6 @@ NO_DISPATCH_KINDS = {
 # Phase 2 kinds whose candidate builders and fakes land in later tasks; each
 # task removes its kinds here and adds them to DISPATCH_CASES.
 PENDING_KINDS = {
-    ActionKind.PROMOTE_UNIT,
     ActionKind.APPOINT_GOVERNOR,
     ActionKind.ASSIGN_GOVERNOR,
     ActionKind.PROMOTE_GOVERNOR,
@@ -230,6 +240,7 @@ def test_executor_performs_the_mapped_call_and_confirms_or_acknowledges(cand, ex
     game.extra_blockers = [("ENDTURN_BLOCKING_CONSIDER_GOVERNMENT_CHANGE", "")]
     if cand.kind is ActionKind.HEAL_UNIT:
         game.spaces[fx.WARRIOR_IDX] = _wounded_space()
+    game.promotable = [fx.promotable_warrior()]
     outcome = _run(game, cand)
     assert game.calls == [expected]
     assert outcome.dispatched is True

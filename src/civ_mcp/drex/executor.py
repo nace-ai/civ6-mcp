@@ -34,23 +34,23 @@ from civ_mcp.drex.candidates import (
     BeliefParams,
     Candidate,
     CityAttackParams,
-    DedicationParams,
-    FoundReligionParams,
-    GreatPersonParams,
-    PromoteGovernorParams,
-    PromoteParams,
     CivicParams,
     DealParams,
     DecisionPoint,
+    DedicationParams,
     DiplomacyParams,
     EnvoyParams,
+    FoundReligionParams,
     GovernmentParams,
+    GreatPersonParams,
     ImproveParams,
     KeepGovernmentParams,
     MoveParams,
     PantheonParams,
     PolicyParams,
     ProductionParams,
+    PromoteGovernorParams,
+    PromoteParams,
     ResearchParams,
     UnitOrderParams,
     UnitRef,
@@ -529,6 +529,22 @@ class Executor:
             ):
                 return _ok()
 
+            case ActionKind.PROMOTE_UNIT:
+                fresh = await gs.get_promotable_units()
+                if not any(u.unit_id == p.unit.unit_id for u in fresh):
+                    return _no("unit_not_promotable")
+                known = self._known.promotions if self._known is not None else None
+                status = (
+                    known
+                    if known is not None and known.unit_id == p.unit.unit_id
+                    else await gs.get_unit_promotions(p.unit.unit_id)
+                )
+                if not any(
+                    o.promotion_type == p.promotion_type for o in status.promotions
+                ):
+                    return _no("promotion_not_available")
+                return _ok(count=status.promotion_count)
+
             case ActionKind.CHOOSE_PANTHEON:
                 status = await gs.get_pantheon_status()
                 if status.has_pantheon:
@@ -751,6 +767,20 @@ class Executor:
                 if await self._poll(cleared):
                     return confirmed("government_prompt_cleared")
                 return self._unconfirmed(raw, "government_prompt_still_blocking")
+
+            case ActionKind.PROMOTE_UNIT:
+                if raw.startswith(("PROMOTED|", "OK:PROMOTED|")):
+                    return confirmed("promoted_from_dispatch")
+                if _game_error(raw):
+                    return self._unconfirmed(raw, "promotion_refused")
+
+                async def more():
+                    st = await gs.get_unit_promotions(p.unit.unit_id)
+                    return st.promotion_count > pre["count"]
+
+                if await self._poll(more):
+                    return confirmed("promotion_count_increased")
+                return self._unconfirmed(raw, "promotion_not_observed")
 
             case ActionKind.CHOOSE_PANTHEON:
 

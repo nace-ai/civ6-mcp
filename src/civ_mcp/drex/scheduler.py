@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 
 from civ_mcp.drex.candidates import ActionKind, DecisionCategory
 from civ_mcp.drex.executor import EMPTY_QUEUE_STATES, ActionOutcome, OutcomeStatus
-from civ_mcp.drex.observation import CoreObservation, DecisionSpec
+from civ_mcp.drex.observation import PROMOTION_BLOCKER, CoreObservation, DecisionSpec
 
 SCHEDULER_ORDER = (
     "diplomacy: open sessions, ascending player id",
@@ -30,6 +30,7 @@ SCHEDULER_ORDER = (
     "policy: when FILL_CIVIC_SLOT blocks, lowest empty slot",
     "envoy: when GIVE_INFLUENCE_TOKEN blocks",
     "pantheon: when PANTHEON blocks",
+    "promotion: when UNIT_PROMOTION blocks, ascending unit id",
     "research: only when none selected",
     "civic: only when none selected",
     "production: empty queues, ascending city id",
@@ -53,6 +54,7 @@ SUPPORTED_BLOCKERS = frozenset(
         POLICY_BLOCKER,
         ENVOY_BLOCKER,
         PANTHEON_BLOCKER,
+        PROMOTION_BLOCKER,
     }
 )
 # Informational blockers that execute_end_turn clears and logs as housekeeping.
@@ -138,6 +140,8 @@ class Scheduler:
                 return self.max_diplomacy_rounds
             case DecisionCategory.POLICY | DecisionCategory.ENVOY:
                 return self.max_repeat_decisions
+            case DecisionCategory.PROMOTION:
+                return 2
         return None
 
     def _open(self, ledger: TurnLedger, spec: DecisionSpec) -> bool:
@@ -239,6 +243,12 @@ class Scheduler:
             spec = DecisionSpec(category, "empire")
             if blocker in blockers and self._open(ledger, spec):
                 return spec
+
+        if PROMOTION_BLOCKER in blockers:
+            for pu in sorted(core.promotable, key=lambda u: u.unit_id):
+                spec = DecisionSpec(DecisionCategory.PROMOTION, f"unit:{pu.unit_id}")
+                if self._open(ledger, spec):
+                    return spec
 
         if core.progress.research_type is None:
             spec = DecisionSpec(DecisionCategory.RESEARCH, "empire")

@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 from civ_mcp import lua as lq
 from civ_mcp.connection import GameConnection
+from civ_mcp.lua import drex_queries as lq_drex
 from civ_mcp.lua.batch import build_batch, split_batch
 from civ_mcp.narrate import (
     narrate_combat_estimate,
@@ -159,6 +160,11 @@ class GameState:
                 self._game_identity = new_id
                 return self._game_identity
         return ("unknown", 0)
+
+    async def get_promotable_units(self) -> list[lq_drex.PromotableUnit]:
+        """GameCore: units that genuinely have a promotion available (XP rule)."""
+        lines = await self.conn.execute_read(lq_drex.build_promotable_units_query())
+        return lq_drex.parse_promotable_units(lines)
 
     async def get_core_snapshot(
         self, parts: frozenset[str] = CORE_PARTS

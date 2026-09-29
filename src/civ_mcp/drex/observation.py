@@ -54,6 +54,9 @@ class CoreObservation:
     pending_deals: list[lq.PendingDeal] = field(default_factory=list)
     blockers: list[Blocker] = field(default_factory=list)
     popup_state: str = "CLEAR"
+    # Units with a promotion available; read only while the promotion
+    # blocker stands (one GameCore round trip), else empty.
+    promotable: list[Any] = field(default_factory=list)
 
     @property
     def game_identity(self) -> tuple[str, int]:
@@ -71,6 +74,9 @@ class CoreObservation:
 
     def city(self, city_id: int) -> lq.CityInfo | None:
         return next((c for c in self.cities if c.city_id == city_id), None)
+
+
+PROMOTION_BLOCKER = "ENDTURN_BLOCKING_UNIT_PROMOTION"
 
 
 @dataclass

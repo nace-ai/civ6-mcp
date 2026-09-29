@@ -75,6 +75,7 @@ class FakeGame:
         self.current_gov = "NONE"
         self.pantheon_status = fx.pantheon()
         self.extra_blockers: list[tuple[str, str]] = []
+        self.promotable: list = []  # Phase 2: units with a promotion available
         self.fail: dict[str, tuple[Exception, bool]] = {}
         self.ignore: set[str] = set()
         self.end_turn_calls = 0
@@ -264,6 +265,18 @@ class FakeGame:
             blockers.append(("ENDTURN_BLOCKING_UNITS", "Units need orders"))
         return blockers
 
+    async def get_promotable_units(self):
+        self.query_counts["get_promotable_units"] += 1
+        self.conn.roundtrips += 1
+        return [copy.deepcopy(u) for u in self.promotable]
+
+    async def get_unit_promotions(self, unit_id):
+        self.query_counts["get_unit_promotions"] += 1
+        self.conn.roundtrips += 1
+        if any(u.unit_id == unit_id for u in self.promotable):
+            return fx.warrior_promotions()
+        return lq.UnitPromotionStatus(unit_id, unit_id % 65536, "UNIT_WARRIOR")
+
     # ---------------------------------------------------------------- actions
     async def dismiss_popup(self):
         self._record("dismiss_popup")
@@ -414,6 +427,18 @@ class FakeGame:
         ]
         self._after(fail)
         return "GOVERNMENT_CHANGE_CONSIDERED"
+
+    async def promote_unit(self, unit_id, promotion_type):
+        fail = self._record("promote_unit", unit_id, promotion_type)
+        self.promotable = [u for u in self.promotable if u.unit_id != unit_id]
+        if not self.promotable:
+            self.extra_blockers = [
+                b
+                for b in self.extra_blockers
+                if b[0] != "ENDTURN_BLOCKING_UNIT_PROMOTION"
+            ]
+        self._after(fail)
+        return f"PROMOTED|{promotion_type}|stored:1->0"
 
     async def choose_pantheon(self, belief_type):
         fail = self._record("choose_pantheon", belief_type)

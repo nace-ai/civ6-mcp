@@ -7,6 +7,7 @@ from typing import Any
 
 from civ_mcp.drex.candidates import DecisionCategory
 from civ_mcp.drex.observation import (
+    PROMOTION_BLOCKER,
     Blocker,
     CoreObservation,
     DecisionInputs,
@@ -31,7 +32,9 @@ class LiveObserver:
     async def core(self) -> CoreObservation:
         gs = self.gs
         if hasattr(gs, "get_core_snapshot"):
-            return self._from_snapshot(await gs.get_core_snapshot())
+            return await self._with_promotable(
+                self._from_snapshot(await gs.get_core_snapshot())
+            )
         civ, seed = await gs.get_game_identity()
         overview = await gs.get_game_overview()
         tech = await gs.get_tech_civics()
@@ -43,19 +46,33 @@ class LiveObserver:
         blockers = await gs.get_end_turn_blockers()
         self._counter += 1
         self._version = f"{civ}:{seed}:T{overview.turn}:{self._counter}"
-        return CoreObservation(
-            version=self._version,
-            civ=civ,
-            seed=seed,
-            local_player_id=overview.player_id,
-            overview=overview,
-            tech=tech,
-            progress=progress,
-            cities=cities,
-            units=units,
-            diplomacy_sessions=sessions,
-            pending_deals=deals,
-            blockers=[Blocker(t, m) for t, m in blockers],
+        return await self._with_promotable(
+            CoreObservation(
+                version=self._version,
+                civ=civ,
+                seed=seed,
+                local_player_id=overview.player_id,
+                overview=overview,
+                tech=tech,
+                progress=progress,
+                cities=cities,
+                units=units,
+                diplomacy_sessions=sessions,
+                pending_deals=deals,
+                blockers=[Blocker(t, m) for t, m in blockers],
+            )
+        )
+
+    async def _with_promotable(self, core: CoreObservation) -> CoreObservation:
+        """Read promotable units only while the promotion blocker stands."""
+        if PROMOTION_BLOCKER not in core.blocker_types():
+            return (
+                core
+                if not core.promotable
+                else dataclasses.replace(core, promotable=[])
+            )
+        return dataclasses.replace(
+            core, promotable=list(await self.gs.get_promotable_units())
         )
 
     def _from_snapshot(self, snap: Any) -> CoreObservation:
@@ -155,7 +172,10 @@ class LiveObserver:
         self._counter += 1
         turn = changes.get("overview", previous.overview).turn
         self._version = f"{previous.civ}:{previous.seed}:T{turn}:{self._counter}"
-        return dataclasses.replace(previous, version=self._version, **changes)
+        core = dataclasses.replace(previous, version=self._version, **changes)
+        if "blockers" in parts or "units" in parts:
+            core = await self._with_promotable(core)
+        return core
 
     async def _wonder_types(self, identity: tuple[str, int]) -> set[str]:
         if self._wonders is None or self._wonders[0] != identity:
@@ -203,4 +223,12 @@ class LiveObserver:
                 return DecisionInputs(pantheon=await gs.get_pantheon_status())
             case DecisionCategory.RESEARCH | DecisionCategory.CIVIC:
                 return DecisionInputs(progress=core.progress)
+            case DecisionCategory.PROMOTION:
+                unit_id = int(eid.split(":", 1)[1]) if isinstance(eid, str) else eid
+                pu = next((u for u in core.promotable if u.unit_id == unit_id), None)
+                if pu is None:
+                    return DecisionInputs()
+                return DecisionInputs(
+                    promotable=pu, promotions=await gs.get_unit_promotions(unit_id)
+                )
         return DecisionInputs()

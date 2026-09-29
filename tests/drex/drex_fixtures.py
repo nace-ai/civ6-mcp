@@ -384,3 +384,35 @@ def pantheon(has: bool = False):
             ),
         ],
     )
+
+
+# ------------------------------------------------------------ Phase 2 kinds
+def promotable_warrior():
+    from civ_mcp.lua.drex_queries import PromotableUnit
+
+    return PromotableUnit(
+        WARRIOR_ID, WARRIOR_IDX, "UNIT_WARRIOR", xp=30, xp_needed=15, promotion_count=1
+    )
+
+
+def warrior_promotions():
+    return lq.UnitPromotionStatus(
+        unit_id=WARRIOR_ID,
+        unit_index=WARRIOR_IDX,
+        unit_type="UNIT_WARRIOR",
+        promotions=[
+            lq.PromotionOption(
+                "PROMOTION_BATTLECRY",
+                "Battlecry",
+                "+7 Combat Strength vs. melee and ranged units",
+            ),
+            lq.PromotionOption(
+                "PROMOTION_TORTOISE",
+                "Tortoise",
+                "+10 Combat Strength when defending against ranged attacks",
+            ),
+        ],
+        xp=30,
+        xp_needed=15,
+        promotion_count=1,
+    )

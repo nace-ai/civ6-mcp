@@ -6,6 +6,8 @@ offer is returned as an ``Exclusion`` with a reason so the omission is logged.
 
 from __future__ import annotations
 
+from typing import Any
+
 from civ_mcp import lua as lq
 from civ_mcp.drex.candidates import (
     ActionKind,
@@ -23,6 +25,7 @@ from civ_mcp.drex.candidates import (
     PantheonParams,
     PolicyParams,
     ProductionParams,
+    PromoteParams,
     ResearchParams,
     UnitOrderParams,
     UnitRef,
@@ -389,6 +392,20 @@ def government_candidates(
             )
         )
     return out
+
+
+def promotion_candidates(unit: Any, status: lq.UnitPromotionStatus) -> list[Candidate]:
+    """One candidate per promotion the engine offers this unit."""
+    ref = UnitRef(unit.unit_id, unit.unit_index, unit.unit_type, -1, -1)
+    return [
+        Candidate.create(
+            ActionKind.PROMOTE_UNIT,
+            PromoteParams(ref, p.promotion_type),
+            label=p.name or pretty(p.promotion_type),
+            facts={"effect": p.description},
+        )
+        for p in status.promotions
+    ]
 
 
 def pantheon_candidates(status: lq.PantheonStatus) -> list[Candidate]:
