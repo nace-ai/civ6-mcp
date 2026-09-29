@@ -190,8 +190,33 @@ def test_dispatch_table_maps_each_kind_to_intended_call(cand, expected):
     assert (call.method, call.args) == expected
 
 
+# Kinds that change nothing in the game (confirmed without a call).
+NO_DISPATCH_KINDS = {
+    ActionKind.WAIT_GREAT_PERSON,
+    ActionKind.CHOOSE_RELIGION,
+    ActionKind.CHOOSE_FOLLOWER_BELIEF,
+    ActionKind.HOLD_FIRE,
+}
+# Phase 2 kinds whose candidate builders and fakes land in later tasks; each
+# task removes its kinds here and adds them to DISPATCH_CASES.
+PENDING_KINDS = {
+    ActionKind.PROMOTE_UNIT,
+    ActionKind.APPOINT_GOVERNOR,
+    ActionKind.ASSIGN_GOVERNOR,
+    ActionKind.PROMOTE_GOVERNOR,
+    ActionKind.CHOOSE_DEDICATION,
+    ActionKind.RECRUIT_GREAT_PERSON,
+    ActionKind.PATRONIZE_GREAT_PERSON,
+    ActionKind.FOUND_RELIGION,
+    ActionKind.ADD_BELIEF,
+    ActionKind.CITY_ATTACK,
+}
+
+
 def test_every_action_kind_has_a_dispatch_case():
-    assert {c.kind for c, _ in DISPATCH_CASES} == set(ActionKind)
+    covered = {c.kind for c, _ in DISPATCH_CASES} | NO_DISPATCH_KINDS | PENDING_KINDS
+    assert covered == set(ActionKind)
+    assert not ({c.kind for c, _ in DISPATCH_CASES} & PENDING_KINDS)
 
 
 @pytest.mark.parametrize(
@@ -593,3 +618,83 @@ def test_production_readback_error_after_inconclusive_dispatch_is_not_confirmed(
     game.fail["verify_production"] = (LuaError("ERR: nil"), False)
     outcome = _execute(game, obs, point, inputs, point.candidates[0])
     assert outcome.status is OutcomeStatus.UNKNOWN
+
+
+# ------------------------------------------------- Phase 2 shared plumbing
+def test_no_dispatch_candidates_are_confirmed_without_touching_the_game():
+    from civ_mcp.drex.candidates import WaitParams
+    from civ_mcp.drex.executor import NO_DISPATCH
+
+    game = FakeGame()
+    cand = Candidate.create(
+        ActionKind.WAIT_GREAT_PERSON, WaitParams("Hypatia"), label="Wait"
+    )
+    assert dispatch_call(cand) is NO_DISPATCH
+    assert NO_DISPATCH.to_record() == {"method": None, "args": []}
+    outcome = _run(game, cand)
+    assert outcome.status is OutcomeStatus.CONFIRMED and outcome.reason == "no_action"
+    assert outcome.dispatched is False and game.calls == []
+
+
+def test_every_new_action_kind_has_a_dispatch_mapping():
+    from civ_mcp.drex import candidates as c
+
+    ref = c.UnitRef(131073, 1, "UNIT_WARRIOR", 10, 12)
+    samples = {
+        ActionKind.PROMOTE_UNIT: c.PromoteParams(ref, "PROMOTION_BATTLECRY"),
+        ActionKind.APPOINT_GOVERNOR: c.AppointGovernorParams("GOVERNOR_THE_EDUCATOR"),
+        ActionKind.ASSIGN_GOVERNOR: c.AssignGovernorParams(
+            "GOVERNOR_THE_EDUCATOR", fx.CAPITAL_ID
+        ),
+        ActionKind.PROMOTE_GOVERNOR: c.PromoteGovernorParams(
+            "GOVERNOR_THE_EDUCATOR", "GOVERNOR_PROMOTION_EDUCATOR_LIBRARIAN"
+        ),
+        ActionKind.CHOOSE_DEDICATION: c.DedicationParams(0, "COMMEMORATION_SCIENTIFIC"),
+        ActionKind.RECRUIT_GREAT_PERSON: c.GreatPersonParams(7, "Hypatia"),
+        ActionKind.PATRONIZE_GREAT_PERSON: c.GreatPersonParams(
+            7, "Hypatia", "YIELD_GOLD"
+        ),
+        ActionKind.WAIT_GREAT_PERSON: c.WaitParams("great_people"),
+        ActionKind.CHOOSE_RELIGION: c.ReligionChoiceParams("RELIGION_BUDDHISM"),
+        ActionKind.CHOOSE_FOLLOWER_BELIEF: c.BeliefParams(
+            "BELIEF_CHORAL_MUSIC", "BELIEF_CLASS_FOLLOWER"
+        ),
+        ActionKind.FOUND_RELIGION: c.FoundReligionParams(
+            "RELIGION_BUDDHISM", "BELIEF_CHORAL_MUSIC", "BELIEF_TITHE"
+        ),
+        ActionKind.ADD_BELIEF: c.BeliefParams("BELIEF_TITHE", "BELIEF_CLASS_ENHANCER"),
+        ActionKind.CITY_ATTACK: c.CityAttackParams(
+            fx.CAPITAL_ID, 11, 12, "UNIT_WARRIOR"
+        ),
+        ActionKind.HOLD_FIRE: c.HoldFireParams(fx.CAPITAL_ID),
+    }
+    expected = {
+        ActionKind.PROMOTE_UNIT: ("promote_unit", (131073, "PROMOTION_BATTLECRY")),
+        ActionKind.APPOINT_GOVERNOR: ("appoint_governor", ("GOVERNOR_THE_EDUCATOR",)),
+        ActionKind.ASSIGN_GOVERNOR: (
+            "assign_governor",
+            ("GOVERNOR_THE_EDUCATOR", fx.CAPITAL_ID),
+        ),
+        ActionKind.PROMOTE_GOVERNOR: (
+            "promote_governor",
+            ("GOVERNOR_THE_EDUCATOR", "GOVERNOR_PROMOTION_EDUCATOR_LIBRARIAN"),
+        ),
+        ActionKind.CHOOSE_DEDICATION: ("choose_dedication", (0,)),
+        ActionKind.RECRUIT_GREAT_PERSON: ("recruit_great_person", (7,)),
+        ActionKind.PATRONIZE_GREAT_PERSON: (
+            "patronize_great_person",
+            (7, "YIELD_GOLD"),
+        ),
+        ActionKind.FOUND_RELIGION: (
+            "found_religion",
+            ("RELIGION_BUDDHISM", "BELIEF_CHORAL_MUSIC", "BELIEF_TITHE"),
+        ),
+        ActionKind.ADD_BELIEF: ("add_belief", ("BELIEF_TITHE",)),
+        ActionKind.CITY_ATTACK: ("city_attack", (fx.CAPITAL_ID, 11, 12)),
+    }
+    for kind, params in samples.items():
+        call = dispatch_call(Candidate.create(kind, params, label="x"))
+        if kind in expected:
+            assert (call.method, call.args) == expected[kind], kind
+        else:
+            assert call.method == "__none__", kind

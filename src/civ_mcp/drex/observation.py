@@ -90,6 +90,16 @@ class DecisionInputs:
     governments: list[lq.GovernmentOption] | None = None
     envoys: lq.EnvoyStatus | None = None
     progress: lq.ProgressTypes | None = None
+    # Phase 2 kinds
+    promotable: Any = None  # lua.drex_queries.PromotableUnit
+    promotions: lq.UnitPromotionStatus | None = None
+    governors: lq.GovernorStatus | None = None
+    dedications: lq.DedicationStatus | None = None
+    great_people: list[lq.GreatPersonInfo] | None = None
+    religion: lq.ReligionFoundingStatus | None = None
+    religion_partial: dict[str, str] | None = None  # religion_type, follower_belief
+    city_targets: list[Any] | None = None  # lua.drex_queries.CityAttackTarget
+    city_attack_city: lq.CityInfo | None = None
     pantheon: lq.PantheonStatus | None = None
 
 

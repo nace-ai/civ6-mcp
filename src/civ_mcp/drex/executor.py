@@ -28,8 +28,17 @@ from typing import Any
 from civ_mcp.connection import LuaError
 from civ_mcp.drex.candidates import (
     ActionKind,
+    AppointGovernorParams,
+    AssignGovernorParams,
     AttackParams,
+    BeliefParams,
     Candidate,
+    CityAttackParams,
+    DedicationParams,
+    FoundReligionParams,
+    GreatPersonParams,
+    PromoteGovernorParams,
+    PromoteParams,
     CivicParams,
     DealParams,
     DecisionPoint,
@@ -86,12 +95,18 @@ class DispatchCall:
 
     def to_record(self) -> dict[str, Any]:
         rec: dict[str, Any] = {
-            "method": self.method,
+            "method": None if self.method == NO_DISPATCH_METHOD else self.method,
             "args": [_plain(a) for a in self.args],
         }
         if self.kwargs:
             rec["kwargs"] = dict(self.kwargs)
         return rec
+
+
+NO_DISPATCH_METHOD = "__none__"
+# A candidate that changes nothing in the game (wait, hold fire, a stored
+# step of a multi-step decision): confirmed without a call.
+NO_DISPATCH = DispatchCall(NO_DISPATCH_METHOD, ())
 
 
 def _plain(value: Any) -> Any:
@@ -143,6 +158,41 @@ def dispatch_call(candidate: Candidate) -> DispatchCall:
             return DispatchCall("keep_current_government", ())
         case ActionKind.CHOOSE_PANTHEON, PantheonParams():
             return DispatchCall("choose_pantheon", (p.belief_type,))
+        case ActionKind.PROMOTE_UNIT, PromoteParams():
+            return DispatchCall("promote_unit", (p.unit.unit_id, p.promotion_type))
+        case ActionKind.APPOINT_GOVERNOR, AppointGovernorParams():
+            return DispatchCall("appoint_governor", (p.governor_type,))
+        case ActionKind.ASSIGN_GOVERNOR, AssignGovernorParams():
+            return DispatchCall("assign_governor", (p.governor_type, p.city_id))
+        case ActionKind.PROMOTE_GOVERNOR, PromoteGovernorParams():
+            return DispatchCall("promote_governor", (p.governor_type, p.promotion_type))
+        case ActionKind.CHOOSE_DEDICATION, DedicationParams():
+            return DispatchCall("choose_dedication", (p.index,))
+        case ActionKind.RECRUIT_GREAT_PERSON, GreatPersonParams():
+            return DispatchCall("recruit_great_person", (p.individual_id,))
+        case ActionKind.PATRONIZE_GREAT_PERSON, GreatPersonParams():
+            return DispatchCall(
+                "patronize_great_person", (p.individual_id, p.yield_type)
+            )
+        case ActionKind.FOUND_RELIGION, FoundReligionParams():
+            return DispatchCall(
+                "found_religion",
+                (p.religion_type, p.follower_belief, p.founder_belief),
+            )
+        case ActionKind.ADD_BELIEF, BeliefParams():
+            return DispatchCall("add_belief", (p.belief_type,))
+        case ActionKind.CITY_ATTACK, CityAttackParams():
+            return DispatchCall("city_attack", (p.city_id, p.target_x, p.target_y))
+        case (
+            (
+                ActionKind.WAIT_GREAT_PERSON
+                | ActionKind.CHOOSE_RELIGION
+                | ActionKind.CHOOSE_FOLLOWER_BELIEF
+                | ActionKind.HOLD_FIRE
+            ),
+            _,
+        ):
+            return NO_DISPATCH
     raise TypeError(f"no dispatch for {candidate.kind} with {type(p).__name__}")
 
 
@@ -251,6 +301,9 @@ class Executor:
             )
 
         call = dispatch_call(candidate)
+        if call is NO_DISPATCH:
+            self._dispatched.add(key)
+            return ActionOutcome(OutcomeStatus.CONFIRMED, "no_action", False)
         if (
             candidate.kind is ActionKind.MOVE_UNIT
             and self._popup_state is not None
@@ -466,6 +519,14 @@ class Executor:
                 return _ok()
 
             case ActionKind.KEEP_GOVERNMENT:
+                return _ok()
+
+            case (
+                ActionKind.WAIT_GREAT_PERSON
+                | ActionKind.CHOOSE_RELIGION
+                | ActionKind.CHOOSE_FOLLOWER_BELIEF
+                | ActionKind.HOLD_FIRE
+            ):
                 return _ok()
 
             case ActionKind.CHOOSE_PANTHEON:

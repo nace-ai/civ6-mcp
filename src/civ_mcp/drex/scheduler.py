@@ -81,6 +81,10 @@ class TurnLedger:
     exit_offered: set[str] = field(default_factory=set)
     stuck_sessions: set[int] = field(default_factory=set)
     blocked_repeats: int = 0
+    # Multi-step religion founding: choices stored between Drex decisions in
+    # the same turn (dropped with the ledger on a new turn).
+    religion_partial: dict[str, str] = field(default_factory=dict)
+    great_people_offered: bool = False
 
 
 def key_for(spec: DecisionSpec) -> str:

@@ -27,6 +27,13 @@ class DecisionCategory(StrEnum):
     ENVOY = "envoy"
     GOVERNMENT = "government"
     PANTHEON = "pantheon"
+    PROMOTION = "promotion"
+    GOVERNOR = "governor"
+    DEDICATION = "dedication"
+    GREAT_PERSON = "great_person"
+    RELIGION = "religion"
+    BELIEF = "belief"
+    CITY_ATTACK = "city_attack"
 
 
 class ActionKind(StrEnum):
@@ -47,6 +54,20 @@ class ActionKind(StrEnum):
     CHANGE_GOVERNMENT = "change_government"
     KEEP_GOVERNMENT = "keep_government"
     CHOOSE_PANTHEON = "choose_pantheon"
+    PROMOTE_UNIT = "promote_unit"
+    APPOINT_GOVERNOR = "appoint_governor"
+    ASSIGN_GOVERNOR = "assign_governor"
+    PROMOTE_GOVERNOR = "promote_governor"
+    CHOOSE_DEDICATION = "choose_dedication"
+    RECRUIT_GREAT_PERSON = "recruit_great_person"
+    PATRONIZE_GREAT_PERSON = "patronize_great_person"
+    WAIT_GREAT_PERSON = "wait_great_person"  # no dispatch: a real "wait" choice
+    CHOOSE_RELIGION = "choose_religion"  # no dispatch: stored for found_religion
+    CHOOSE_FOLLOWER_BELIEF = "choose_follower_belief"  # no dispatch: stored
+    FOUND_RELIGION = "found_religion"
+    ADD_BELIEF = "add_belief"
+    CITY_ATTACK = "city_attack"
+    HOLD_FIRE = "hold_fire"  # no dispatch
 
 
 @dataclass(frozen=True)
@@ -149,6 +170,78 @@ class PantheonParams:
     belief_type: str
 
 
+@dataclass(frozen=True)
+class PromoteParams:
+    unit: UnitRef
+    promotion_type: str
+
+
+@dataclass(frozen=True)
+class AppointGovernorParams:
+    governor_type: str
+
+
+@dataclass(frozen=True)
+class AssignGovernorParams:
+    governor_type: str
+    city_id: int
+
+
+@dataclass(frozen=True)
+class PromoteGovernorParams:
+    governor_type: str
+    promotion_type: str
+
+
+@dataclass(frozen=True)
+class DedicationParams:
+    index: int
+    name: str
+
+
+@dataclass(frozen=True)
+class GreatPersonParams:
+    individual_id: int
+    individual_name: str
+    yield_type: str | None = None  # None = recruit with points; else patronize
+
+
+@dataclass(frozen=True)
+class WaitParams:
+    subject: str
+
+
+@dataclass(frozen=True)
+class ReligionChoiceParams:
+    religion_type: str
+
+
+@dataclass(frozen=True)
+class BeliefParams:
+    belief_type: str
+    belief_class: str
+
+
+@dataclass(frozen=True)
+class FoundReligionParams:
+    religion_type: str
+    follower_belief: str
+    founder_belief: str
+
+
+@dataclass(frozen=True)
+class CityAttackParams:
+    city_id: int
+    target_x: int
+    target_y: int
+    target_unit_type: str
+
+
+@dataclass(frozen=True)
+class HoldFireParams:
+    city_id: int
+
+
 ActionParams = (
     ResearchParams
     | CivicParams
@@ -164,6 +257,18 @@ ActionParams = (
     | GovernmentParams
     | KeepGovernmentParams
     | PantheonParams
+    | PromoteParams
+    | AppointGovernorParams
+    | AssignGovernorParams
+    | PromoteGovernorParams
+    | DedicationParams
+    | GreatPersonParams
+    | WaitParams
+    | ReligionChoiceParams
+    | BeliefParams
+    | FoundReligionParams
+    | CityAttackParams
+    | HoldFireParams
 )
 
 PARAMS_FOR_KIND: dict[ActionKind, type] = {
@@ -184,6 +289,20 @@ PARAMS_FOR_KIND: dict[ActionKind, type] = {
     ActionKind.CHANGE_GOVERNMENT: GovernmentParams,
     ActionKind.KEEP_GOVERNMENT: KeepGovernmentParams,
     ActionKind.CHOOSE_PANTHEON: PantheonParams,
+    ActionKind.PROMOTE_UNIT: PromoteParams,
+    ActionKind.APPOINT_GOVERNOR: AppointGovernorParams,
+    ActionKind.ASSIGN_GOVERNOR: AssignGovernorParams,
+    ActionKind.PROMOTE_GOVERNOR: PromoteGovernorParams,
+    ActionKind.CHOOSE_DEDICATION: DedicationParams,
+    ActionKind.RECRUIT_GREAT_PERSON: GreatPersonParams,
+    ActionKind.PATRONIZE_GREAT_PERSON: GreatPersonParams,
+    ActionKind.WAIT_GREAT_PERSON: WaitParams,
+    ActionKind.CHOOSE_RELIGION: ReligionChoiceParams,
+    ActionKind.CHOOSE_FOLLOWER_BELIEF: BeliefParams,
+    ActionKind.FOUND_RELIGION: FoundReligionParams,
+    ActionKind.ADD_BELIEF: BeliefParams,
+    ActionKind.CITY_ATTACK: CityAttackParams,
+    ActionKind.HOLD_FIRE: HoldFireParams,
 }
 
 
@@ -235,6 +354,42 @@ def candidate_id_for(kind: ActionKind, params: ActionParams) -> str:
             return "government:keep"
         case ActionKind.CHOOSE_PANTHEON, PantheonParams(belief_type=b):
             return f"pantheon:{b}"
+        case ActionKind.PROMOTE_UNIT, PromoteParams(unit=u, promotion_type=t):
+            return f"promote:{u.unit_id}:{t}"
+        case ActionKind.APPOINT_GOVERNOR, AppointGovernorParams(governor_type=g):
+            return f"governor:appoint:{g}"
+        case ActionKind.ASSIGN_GOVERNOR, AssignGovernorParams(
+            governor_type=g, city_id=c
+        ):
+            return f"governor:assign:{g}:{c}"
+        case ActionKind.PROMOTE_GOVERNOR, PromoteGovernorParams(
+            governor_type=g, promotion_type=t
+        ):
+            return f"governor:promote:{g}:{t}"
+        case ActionKind.CHOOSE_DEDICATION, DedicationParams(name=n):
+            return f"dedication:{n}"
+        case ActionKind.RECRUIT_GREAT_PERSON, GreatPersonParams(individual_id=i):
+            return f"great_person:recruit:{i}"
+        case ActionKind.PATRONIZE_GREAT_PERSON, GreatPersonParams(
+            individual_id=i, yield_type=y
+        ):
+            return f"great_person:patronize:{i}:{y}"
+        case ActionKind.WAIT_GREAT_PERSON, WaitParams():
+            return "great_person:wait"
+        case ActionKind.CHOOSE_RELIGION, ReligionChoiceParams(religion_type=r):
+            return f"religion:{r}"
+        case ActionKind.CHOOSE_FOLLOWER_BELIEF, BeliefParams(belief_type=b):
+            return f"follower:{b}"
+        case ActionKind.FOUND_RELIGION, FoundReligionParams(founder_belief=b):
+            return f"found:{b}"
+        case ActionKind.ADD_BELIEF, BeliefParams(belief_type=b):
+            return f"belief:{b}"
+        case ActionKind.CITY_ATTACK, CityAttackParams(
+            city_id=c, target_x=x, target_y=y
+        ):
+            return f"city_attack:{c}:{x},{y}"
+        case ActionKind.HOLD_FIRE, HoldFireParams(city_id=c):
+            return f"hold_fire:{c}"
     raise TypeError(f"{kind} does not accept {type(params).__name__}")
 
 

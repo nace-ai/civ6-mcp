@@ -31,6 +31,20 @@ _TABLE: dict[ActionKind, frozenset[str]] = {
     ActionKind.CHOOSE_PANTHEON: frozenset({"overview"}),
     ActionKind.DIPLOMACY_RESPOND: frozenset({"sessions", "deals", "overview"}),
     ActionKind.DEAL_RESPOND: frozenset({"sessions", "deals", "overview"}),
+    ActionKind.PROMOTE_UNIT: frozenset({"units"}),
+    ActionKind.APPOINT_GOVERNOR: frozenset(),
+    ActionKind.ASSIGN_GOVERNOR: frozenset({"cities"}),
+    ActionKind.PROMOTE_GOVERNOR: frozenset(),
+    ActionKind.CHOOSE_DEDICATION: frozenset({"overview"}),
+    ActionKind.RECRUIT_GREAT_PERSON: frozenset({"units", "overview"}),
+    ActionKind.PATRONIZE_GREAT_PERSON: frozenset({"units", "overview"}),
+    ActionKind.WAIT_GREAT_PERSON: frozenset(),
+    ActionKind.CHOOSE_RELIGION: frozenset(),
+    ActionKind.CHOOSE_FOLLOWER_BELIEF: frozenset(),
+    ActionKind.FOUND_RELIGION: frozenset({"overview", "units", "cities"}),
+    ActionKind.ADD_BELIEF: frozenset({"overview"}),
+    ActionKind.CITY_ATTACK: frozenset({"units"}),
+    ActionKind.HOLD_FIRE: frozenset(),
 }
 
 
