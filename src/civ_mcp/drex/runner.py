@@ -16,7 +16,7 @@ from civ_mcp.drex.live import LiveObserver
 from civ_mcp.drex.observation import CoreObservation, DecisionMemory, Fact
 from civ_mcp.drex.points import build_decision_point
 from civ_mcp.drex.refresh import refresh_parts
-from civ_mcp.drex.scheduler import SCHEDULER_ORDER, EndTurn, Scheduler, Stop, TurnLedger
+from civ_mcp.drex.scheduler import SCHEDULER_ORDER, EndTurn, Scheduler, TurnLedger
 from civ_mcp.drex.selectors import (
     ControllerFilteringError,
     Selector,
@@ -43,10 +43,18 @@ class RunConfig:
     nearby_radius: int = 2
     dry_run: bool = False
     max_unit_decisions: int = 3
-    max_decisions_per_turn: int = 80
+    max_decisions_per_turn: int = 200
     max_failures_per_key: int = 2
     max_session_close_attempts: int = 2
     max_interruptions_per_turn: int = 2
+    # A blocker no decision kind handles yet: wait, re-observe, never stop.
+    unsupported_wait_s: float = 30.0
+    # A blocked end turn that repeats with no decision in between: dismiss
+    # popups and try once more after this many repeats.
+    blocked_repeats_before_dismiss: int = 3
+    # Pause between repeated blocked end turns so the loop does not hammer
+    # the game while it waits for something to change.
+    blocked_repeat_wait_s: float = 1.0
 
 
 @dataclass
@@ -128,6 +136,11 @@ class Runner:
         self._last_core: CoreObservation | None = None
         self._on_turn = on_turn
         self._current_decision_id: str | None = None
+        self._sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep
+        # Tests only: bound the loop so a deliberately stuck game ends the run
+        # as "interrupted" instead of spinning.
+        self.max_loop_iterations: int | None = None
+        self._iterations = 0
         self._last_observe = {"ms": 0.0, "roundtrips": 0}
         self._turn_stats = {"decisions": 0, "api_ms": 0.0, "roundtrips": 0, "t0": 0.0}
 
@@ -156,6 +169,21 @@ class Runner:
         if self.spectator is not None:
             self.spectator.popup_status(core.popup_state)
         return core
+
+    async def _wait_unsupported(
+        self, core: CoreObservation, blockers: list[str]
+    ) -> None:
+        """A prompt no decision kind handles yet. Log it and wait; a restart on
+        newer code picks the game up from here. The run never stops for it."""
+        self.log.write(
+            "unsupported_blocker",
+            {
+                "turn": core.turn,
+                "blockers": blockers,
+                "wait_s": self.cfg.unsupported_wait_s,
+            },
+        )
+        await self._sleep(self.cfg.unsupported_wait_s)
 
     def selection_waiting(self, info: dict[str, Any]) -> None:
         """Selector callback: Drex could not answer yet; the run keeps waiting."""
@@ -228,26 +256,45 @@ class Runner:
         retry_allowed = False
 
         while True:
+            self._iterations += 1
+            if (
+                self.max_loop_iterations is not None
+                and self._iterations > self.max_loop_iterations
+            ):
+                return await self._stop("interrupted", core, checkpoint=False)
             if self._turns >= self.cfg.turns:
                 return await self._stop("turn_budget_reached", core, checkpoint=False)
             if core.game_identity != identity:
-                return await self._stop("game_identity_changed", core, checkpoint=False)
+                self.log.write(
+                    "identity_changed",
+                    {"from": list(identity), "to": list(core.game_identity)},
+                )
+                identity = core.game_identity
+                self.memory = DecisionMemory()
+                self.memory.bind_game(identity)
+                self.observer._wonders = None
+                ledger = TurnLedger(turn=core.turn, full_observed=True)
+                blocked, retry_allowed, in_flight = None, False, False
             if core.turn != ledger.turn:
                 # A new turn always starts from the full observation taken
                 # after the end turn advanced.
                 ledger = TurnLedger(turn=core.turn, full_observed=True)
 
-            informational = self.scheduler.informational_sessions(core)
+            informational = self.scheduler.informational_sessions(
+                core, exclude=ledger.stuck_sessions
+            )
             if informational and not self.cfg.dry_run:
                 for pid in informational:
                     n = close_attempts.get((core.turn, pid), 0) + 1
                     close_attempts[(core.turn, pid)] = n
                     if n > self.cfg.max_session_close_attempts:
-                        return await self._stop(
-                            f"informational_session_stuck:player_{pid}",
-                            core,
-                            checkpoint=True,
+                        # Leave it for this turn; the scheduler proceeds past it.
+                        ledger.stuck_sessions.add(pid)
+                        self.log.write(
+                            "informational_session_stuck",
+                            {"turn": core.turn, "player": pid, "attempts": n},
                         )
+                        continue
                     raw = await self.gs.diplomacy_respond(pid, "EXIT")
                     self.log.write(
                         "housekeeping",
@@ -276,8 +323,16 @@ class Runner:
                 if in_flight
                 else self.scheduler.next(core, ledger)
             )
-            if isinstance(step, Stop):
-                return await self._stop(step.reason, core, checkpoint=True)
+            if (
+                isinstance(step, EndTurn)
+                and ledger.budget_hit
+                and not ledger.budget_logged
+            ):
+                ledger.budget_logged = True
+                self.log.write(
+                    "budget_end_turn",
+                    {"turn": core.turn, "decisions": ledger.decisions},
+                )
 
             if isinstance(step, EndTurn):
                 if not in_flight and not ledger.full_observed:
@@ -289,19 +344,39 @@ class Runner:
                 if not in_flight:
                     unsupported = self.scheduler.unsupported_blockers(core)
                     if unsupported:
-                        return await self._stop(
-                            "unsupported_blocker:" + ",".join(unsupported),
-                            core,
-                            checkpoint=True,
-                        )
+                        if self.cfg.dry_run:
+                            return await self._stop(
+                                "dry_run_complete", core, checkpoint=False
+                            )
+                        await self._wait_unsupported(core, unsupported)
+                        core = await self._observe()
+                        continue
                 if self.cfg.dry_run:
                     return await self._stop("dry_run_complete", core, checkpoint=False)
                 if blocked is not None and not retry_allowed:
-                    return await self._stop(
-                        f"end_turn_{blocked.status}:{_describe_block(blocked)}",
-                        core,
-                        checkpoint=True,
-                    )
+                    # Nothing changed since the last blocked end turn. Re-observe
+                    # (the game may have moved on); after a few repeats clear
+                    # popups and allow one more request. Never stop.
+                    ledger.blocked_repeats += 1
+                    if (
+                        ledger.blocked_repeats
+                        >= self.cfg.blocked_repeats_before_dismiss
+                    ):
+                        raw = await self.gs.dismiss_popup()
+                        self.log.write(
+                            "end_turn_blocked_repeat",
+                            {
+                                "turn": core.turn,
+                                "blockers": _describe_block(blocked),
+                                "repeats": ledger.blocked_repeats,
+                                "dismissed": raw,
+                            },
+                        )
+                        ledger.blocked_repeats = 0
+                        retry_allowed = True
+                    await self._sleep(self.cfg.blocked_repeat_wait_s)
+                    core = await self._observe()
+                    continue
                 retry_allowed = False
                 t0 = time.perf_counter()
                 if self.spectator is not None:
@@ -334,9 +409,9 @@ class Runner:
                     )
                 elif outcome.status == "blocked":
                     if outcome.world_congress_pending:
-                        return await self._stop(
-                            "unsupported_blocker:world_congress", core, checkpoint=True
-                        )
+                        await self._wait_unsupported(core, ["world_congress"])
+                        core = await self._observe()
+                        continue
                     blocked = outcome
                 elif outcome.status == "interrupted":
                     ledger.counts[INTERRUPTION_KEY] += 1
@@ -348,9 +423,12 @@ class Runner:
                 elif outcome.status == "game_over":
                     return await self._stop("game_over", core, checkpoint=False)
                 else:
-                    return await self._stop(
-                        f"end_turn_{outcome.status}", core, checkpoint=True
+                    self.log.write(
+                        "end_turn_status",
+                        {"turn": core.turn, "status": outcome.status},
                     )
+                    core = await self._observe()
+                    continue
                 core = await self._observe(reactive_from=core if in_flight else None)
                 continue
 
@@ -366,6 +444,7 @@ class Runner:
                 decision_id=decision_id,
                 max_options=self.cfg.max_options,
                 failed=ledger.failed_candidates,
+                allow_exit=self.scheduler.session_exhausted(ledger, step),
                 exclude_kinds=(
                     frozenset({ActionKind.MOVE_UNIT})
                     if self.scheduler.final_unit_decision(ledger, step)

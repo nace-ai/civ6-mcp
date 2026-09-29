@@ -283,24 +283,34 @@ def unit_candidates(
     return out, excluded
 
 
-def diplomacy_candidates(session: lq.DiplomacySession) -> list[Candidate]:
+def diplomacy_candidates(
+    session: lq.DiplomacySession, *, allow_exit: bool = False
+) -> list[Candidate]:
     """POSITIVE/NEGATIVE are the responses DiplomacyManager.AddResponse accepts.
 
-    War declarations and goodbye phases have no meaningful choice, and deal
-    sessions are decided through ``deal_candidates``.
+    War declarations and goodbye phases have no meaningful choice. A session
+    that carries a deal summary is decided here as accept / reject of that
+    deal. With ``allow_exit`` (the session's failure budget is spent) Drex is
+    also offered closing the screen, so a stuck dialogue never stops the run.
     """
-    if session.is_at_war or session.buttons == "GOODBYE" or session.deal_summary:
+    if session.is_at_war or session.buttons == "GOODBYE":
         return []
+    if session.deal_summary:
+        labels = (("POSITIVE", "Accept the deal"), ("NEGATIVE", "Reject the deal"))
+    else:
+        labels = (
+            ("POSITIVE", "Respond positively"),
+            ("NEGATIVE", "Respond negatively"),
+        )
+    if allow_exit:
+        labels = (*labels, ("EXIT", "Close the screen"))
     return [
         Candidate.create(
             ActionKind.DIPLOMACY_RESPOND,
             DiplomacyParams(other_player_id=session.other_player_id, response=resp),
             label=label,
         )
-        for resp, label in (
-            ("POSITIVE", "Respond positively"),
-            ("NEGATIVE", "Respond negatively"),
-        )
+        for resp, label in labels
     ]
 
 

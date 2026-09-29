@@ -55,7 +55,11 @@ def _policy_slot(status: lq.GovernmentStatus) -> lq.PolicySlot | None:
 
 
 def _enumerate(
-    spec: DecisionSpec, core: CoreObservation, inputs: DecisionInputs
+    spec: DecisionSpec,
+    core: CoreObservation,
+    inputs: DecisionInputs,
+    *,
+    allow_exit: bool = False,
 ) -> tuple[list[Candidate], list[Exclusion], str, DecisionInputs]:
     cat = spec.category
     entity = spec.entity
@@ -78,7 +82,8 @@ def _enumerate(
         )
         return cands, excl, entity, inputs
     if cat is DecisionCategory.DIPLOMACY and inputs.session:
-        return diplomacy_candidates(inputs.session), [], entity, inputs
+        cands = diplomacy_candidates(inputs.session, allow_exit=allow_exit)
+        return cands, [], entity, inputs
     if cat is DecisionCategory.DEAL and inputs.deal:
         return deal_candidates(inputs.deal), [], entity, inputs
     if cat is DecisionCategory.POLICY and inputs.policies is not None:
@@ -120,8 +125,11 @@ def build_decision_point(
     max_options: int,
     failed: frozenset[str] | set[str] = frozenset(),
     exclude_kinds: frozenset[ActionKind] = frozenset(),
+    allow_exit: bool = False,
 ) -> tuple[DecisionPoint | None, list[Exclusion]]:
-    candidates, excluded, entity, inputs = _enumerate(spec, core, inputs)
+    candidates, excluded, entity, inputs = _enumerate(
+        spec, core, inputs, allow_exit=allow_exit
+    )
     legal = len(candidates)
     untried = []
     for c in candidates:

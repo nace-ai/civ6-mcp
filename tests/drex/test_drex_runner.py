@@ -29,6 +29,10 @@ class PreferSelector:
         return SelectionResult(validate_selection(point, pick, selector=self.name))
 
 
+async def _no_sleep_async(_):
+    return None
+
+
 def _fake_end_turn(game):
     async def end_turn(gs):
         game.end_turn_attempts = getattr(game, "end_turn_attempts", 0) + 1
@@ -129,21 +133,6 @@ def test_research_is_not_redecided_on_the_next_turn(tmp_path):
     assert [m for m, _ in game.calls].count("set_research") == 1
 
 
-def test_unsupported_blocker_checkpoints_and_stops(tmp_path):
-    game = FakeGame()
-    game.extra_blockers = [
-        ("ENDTURN_BLOCKING_GOVERNOR_APPOINTMENT", "Appoint a governor")
-    ]
-    runner, checkpoints = _runner(game, tmp_path)
-    result = asyncio.run(runner.run())
-    assert (
-        result.stop_reason
-        == "unsupported_blocker:ENDTURN_BLOCKING_GOVERNOR_APPOINTMENT"
-    )
-    assert checkpoints == ["DREX_CHECKPOINT_T0005"]
-    assert game.end_turn_calls == 0
-
-
 def test_selector_waits_are_logged_and_the_run_continues(tmp_path):
     game = FakeGame()
 
@@ -215,7 +204,7 @@ def test_selector_required_outside_dry_run(tmp_path):
         )
 
 
-def test_game_identity_change_stops_the_run(tmp_path):
+def test_game_identity_change_is_logged_and_the_run_continues(tmp_path):
     game = FakeGame()
     runner, _ = _runner(game, tmp_path, turns=3)
     original = game.get_end_turn_blockers
@@ -227,17 +216,41 @@ def test_game_identity_change_stops_the_run(tmp_path):
 
     game.get_end_turn_blockers = swap_after_first_turn
     result = asyncio.run(runner.run())
-    assert result.stop_reason == "game_identity_changed"
+    assert result.stop_reason == "turn_budget_reached"
+    changed = [r for r in _records(tmp_path) if r["type"] == "identity_changed"]
+    assert changed and changed[0]["to"] == ["rome", 99]
 
 
-def test_persistently_blocked_end_turn_stops_instead_of_retrying(tmp_path):
+def test_persistently_blocked_end_turn_dismisses_then_keeps_going(tmp_path):
     game = FakeGame()
-    game.extra_blockers = [("ENDTURN_BLOCKING_UNITS", "Units need orders")]
+    game.extra_blockers = [("ENDTURN_BLOCKING_UNITS", "ghost")]
     runner, checkpoints = _runner(game, tmp_path)
+    runner._sleep = _no_sleep_async
+    runner.max_loop_iterations = 60
     result = asyncio.run(runner.run())
-    assert result.stop_reason == "end_turn_blocked:ENDTURN_BLOCKING_UNITS"
-    assert checkpoints == ["DREX_CHECKPOINT_T0005"]
+    assert result.stop_reason == "interrupted" and checkpoints == []
+    types = [r["type"] for r in _records(tmp_path)]
+    assert "end_turn_blocked_repeat" in types
+    assert any(c[0] == "dismiss_popup" for c in game.calls)
     assert game.end_turn_calls == 0
+
+
+def test_unsupported_blocker_waits_and_logs_instead_of_stopping(tmp_path):
+    game = FakeGame()
+    game.extra_blockers = [("ENDTURN_BLOCKING_ARTIFACT", "Choose artifact")]
+    slept = []
+
+    async def sleep(s):
+        slept.append(s)
+
+    runner, checkpoints = _runner(game, tmp_path, unsupported_wait_s=30.0)
+    runner._sleep = sleep
+    runner.max_loop_iterations = 12
+    result = asyncio.run(runner.run())
+    assert result.stop_reason == "interrupted" and checkpoints == []
+    recs = [r for r in _records(tmp_path) if r["type"] == "unsupported_blocker"]
+    assert recs and recs[0]["blockers"] == ["ENDTURN_BLOCKING_ARTIFACT"]
+    assert slept and slept[0] == 30.0
 
 
 def test_informational_war_session_is_closed_as_logged_housekeeping(tmp_path):
@@ -274,10 +287,14 @@ def test_unobserved_deal_rejection_is_never_inverted_into_acceptance(tmp_path):
     runner, checkpoints = _runner(
         game, tmp_path, selector=PreferSelector(prefixes=("deal:1:reject",))
     )
+    runner._sleep = _no_sleep_async
     result = asyncio.run(runner.run())
+    # the failed rejection is never inverted; the deal is left alone and the
+    # run goes on
     assert ("respond_to_deal", (1, True)) not in game.calls
-    assert result.stop_reason.startswith(("deal_unresolved", "selector_paused"))
-    assert checkpoints
+    assert result.stop_reason == "turn_budget_reached" and checkpoints == []
+    rejects = [a for m, a in game.calls if m == "respond_to_deal"]
+    assert rejects and all(a == (1, False) for a in rejects)
 
 
 def test_at_war_peace_deal_reaches_the_selector_instead_of_being_closed(tmp_path):
@@ -316,15 +333,6 @@ def test_unexpected_error_stops_with_record_and_checkpoint(tmp_path):
     assert result.stop_reason.startswith("error:LuaError")
     assert checkpoints
     assert _records(tmp_path)[-1]["type"] == "stop"
-
-
-def test_blocked_end_turn_with_nothing_new_to_decide_is_not_retried(tmp_path):
-    game = FakeGame()
-    game.extra_blockers = [("ENDTURN_BLOCKING_UNITS", "Units need orders")]
-    runner, _ = _runner(game, tmp_path)
-    result = asyncio.run(runner.run())
-    assert result.stop_reason == "end_turn_blocked:ENDTURN_BLOCKING_UNITS"
-    assert game.end_turn_attempts == 1
 
 
 def test_war_interruption_allows_exactly_one_new_end_turn_request(tmp_path):
@@ -401,7 +409,7 @@ def test_only_sessions_and_deals_are_observed_while_end_turn_is_in_flight(tmp_pa
     assert seen["units_queries_at_resume"] == seen["units_queries"]
 
 
-def test_pending_world_congress_stops_without_retrying(tmp_path):
+def test_pending_world_congress_waits_instead_of_stopping(tmp_path):
     game = FakeGame()
     attempts = 0
 
@@ -427,9 +435,13 @@ def test_pending_world_congress_stops_without_retrying(tmp_path):
         end_turn=end_turn,
         checkpoint=checkpoint,
     )
+    runner.max_loop_iterations = 8
+    runner._sleep = _no_sleep_async
     result = asyncio.run(runner.run())
-    assert result.stop_reason == "unsupported_blocker:world_congress"
-    assert attempts == 1 and checkpoints == [5]
+    assert result.stop_reason == "interrupted" and checkpoints == []
+    recs = [r for r in _records(tmp_path) if r["type"] == "unsupported_blocker"]
+    assert recs and recs[0]["blockers"] == ["world_congress"]
+    assert attempts >= 1
 
 
 def test_move_is_followed_by_partial_refresh_not_full_observe(tmp_path):

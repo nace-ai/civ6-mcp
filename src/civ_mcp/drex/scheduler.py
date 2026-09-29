@@ -64,11 +64,6 @@ class EndTurn:
 
 
 @dataclass
-class Stop:
-    reason: str
-
-
-@dataclass
 class TurnLedger:
     turn: int
     resolved: set[str] = field(default_factory=set)
@@ -77,6 +72,14 @@ class TurnLedger:
     failed_candidates: set[str] = field(default_factory=set)
     decisions: int = 0
     full_observed: bool = False
+    # Loop-guard state: the per-turn decision cap was hit (end the turn), the
+    # sessions already offered "close the screen", players whose informational
+    # session would not close, and how often a blocked end turn repeated.
+    budget_hit: bool = False
+    budget_logged: bool = False
+    exit_offered: set[str] = field(default_factory=set)
+    stuck_sessions: set[int] = field(default_factory=set)
+    blocked_repeats: int = 0
 
 
 def key_for(spec: DecisionSpec) -> str:
@@ -139,13 +142,20 @@ class Scheduler:
         limit = self._limit(spec)
         return limit is None or ledger.counts[key] < limit
 
-    def informational_sessions(self, core: CoreObservation) -> list[int]:
+    def informational_sessions(
+        self, core: CoreObservation, exclude: set[int] | frozenset[int] = frozenset()
+    ) -> list[int]:
         deal_players = {d.other_player_id for d in core.pending_deals}
         return sorted(
             s.other_player_id
             for s in core.diplomacy_sessions
-            if _informational(s, deal_players)
+            if _informational(s, deal_players) and s.other_player_id not in exclude
         )
+
+    def session_exhausted(self, ledger: TurnLedger, spec: DecisionSpec) -> bool:
+        """True once the failure budget for this session is spent: the next
+        decision also offers Drex "close the screen"."""
+        return key_for(spec) in ledger.exit_offered
 
     def unsupported_blockers(self, core: CoreObservation) -> list[str]:
         return sorted(
@@ -154,9 +164,7 @@ class Scheduler:
             if b not in SUPPORTED_BLOCKERS and b not in HOUSEKEEPING_BLOCKERS
         )
 
-    def next(
-        self, core: CoreObservation, ledger: TurnLedger
-    ) -> DecisionSpec | EndTurn | Stop:
+    def next(self, core: CoreObservation, ledger: TurnLedger) -> DecisionSpec | EndTurn:
         reactive = self.next_reactive(core, ledger)
         if reactive is not None:
             return reactive
@@ -164,36 +172,42 @@ class Scheduler:
 
     def next_reactive(
         self, core: CoreObservation, ledger: TurnLedger
-    ) -> DecisionSpec | Stop | None:
+    ) -> DecisionSpec | None:
         """Diplomacy sessions and incoming deals only (safe while an end turn
         is in flight); None when neither needs a decision."""
         if ledger.decisions >= self.max_decisions_per_turn:
-            return Stop(f"decision_budget_exhausted:{ledger.decisions}")
+            ledger.budget_hit = True
+            return None
 
         deal_players = {d.other_player_id for d in core.pending_deals}
         for s in sorted(core.diplomacy_sessions, key=lambda s: s.other_player_id):
             pid = s.other_player_id
             if _informational(s, deal_players) or pid in deal_players:
                 continue
-            if s.deal_summary:
-                return Stop(
-                    f"unsupported_session:deal_without_pending_items:player_{pid}"
-                )
+            # A session carrying a deal but no pending deal items is decided
+            # through the dialogue itself (accept / reject).
             spec = DecisionSpec(DecisionCategory.DIPLOMACY, f"player:{pid}")
-            if not self._open(ledger, spec):
-                return Stop(f"diplomacy_session_unresolved:player_{pid}")
-            return spec
+            if self._open(ledger, spec):
+                return spec
+            key = key_for(spec)
+            if key not in ledger.exit_offered:
+                # Failure budget spent: one more decision, now including
+                # "close the screen", then the session is left alone.
+                ledger.exit_offered.add(key)
+                return spec
+            continue
 
         for d in sorted(core.pending_deals, key=lambda d: d.other_player_id):
             spec = DecisionSpec(DecisionCategory.DEAL, f"player:{d.other_player_id}")
-            if not self._open(ledger, spec):
-                return Stop(f"deal_unresolved:player_{d.other_player_id}")
-            return spec
+            if self._open(ledger, spec):
+                return spec
         return None
 
     def _next_proactive(
         self, core: CoreObservation, ledger: TurnLedger
     ) -> DecisionSpec | EndTurn:
+        if ledger.budget_hit:
+            return EndTurn()
         blockers = core.blocker_types()
         for blocker, category in (
             (GOVERNMENT_BLOCKER, DecisionCategory.GOVERNMENT),

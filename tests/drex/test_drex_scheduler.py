@@ -6,7 +6,7 @@ from civ_mcp import lua as lq
 from civ_mcp.drex.candidates import ActionKind, DecisionCategory
 from civ_mcp.drex.executor import ActionOutcome, OutcomeStatus
 from civ_mcp.drex.observation import Blocker, CoreObservation, DecisionSpec
-from civ_mcp.drex.scheduler import EndTurn, Scheduler, Stop, TurnLedger
+from civ_mcp.drex.scheduler import EndTurn, Scheduler, TurnLedger
 
 
 def _core(
@@ -163,14 +163,14 @@ def test_repeated_failures_give_up_on_that_key_for_the_turn():
     assert isinstance(s.next(core, ledger), EndTurn)
 
 
-def test_decision_budget_stops_the_run():
+def test_decision_budget_exhausted_ends_the_turn_instead_of_stopping():
     s = Scheduler(max_decisions_per_turn=1)
     ledger = TurnLedger(turn=5)
     core = _core()
     spec = s.next(core, ledger)
     s.note(ledger, spec, ActionKind.SET_RESEARCH, _outcome())
     step = s.next(core, ledger)
-    assert isinstance(step, Stop) and "budget" in step.reason
+    assert isinstance(step, EndTurn) and ledger.budget_hit is True
 
 
 def test_unsupported_blockers_are_reported():
@@ -186,10 +186,31 @@ def test_unsupported_blockers_are_reported():
     ]
 
 
-def test_deal_session_without_pending_deal_is_unsupported():
+def test_deal_session_without_pending_deal_is_a_diplomacy_decision():
     core = _core(diplomacy_sessions=[fx.session(deal_summary="They offer: Gold")])
     step = _next(core)
-    assert isinstance(step, Stop) and "session" in step.reason
+    assert isinstance(step, DecisionSpec)
+    assert step.category is DecisionCategory.DIPLOMACY and step.entity == "player:1"
+
+
+def test_unresolved_session_after_failures_offers_exit_then_ends_turn():
+    s = Scheduler(max_failures_per_key=1)
+    core = _core(diplomacy_sessions=[fx.session()])
+    ledger = TurnLedger(turn=5)
+    spec = s.next(core, ledger)
+    assert spec.category is DecisionCategory.DIPLOMACY
+    assert s.session_exhausted(ledger, spec) is False
+    s.note(ledger, spec, ActionKind.DIPLOMACY_RESPOND, _outcome(OutcomeStatus.REJECTED))
+    again = s.next(core, ledger)
+    assert again == spec and s.session_exhausted(ledger, again) is True
+    s.note(
+        ledger, again, ActionKind.DIPLOMACY_RESPOND, _outcome(OutcomeStatus.REJECTED)
+    )
+    # the session is left alone; the scheduler moves on to other decisions
+    after = s.next(core, ledger)
+    assert (
+        isinstance(after, EndTurn) or after.category is not DecisionCategory.DIPLOMACY
+    )
 
 
 def test_informational_sessions_are_listed_for_housekeeping():

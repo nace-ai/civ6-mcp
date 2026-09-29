@@ -183,7 +183,19 @@ class TestReactiveAndGovernance:
     def test_informational_sessions_are_not_decisions(self):
         assert diplomacy_candidates(fx.session(is_at_war=True)) == []
         assert diplomacy_candidates(fx.session(buttons="GOODBYE")) == []
-        assert diplomacy_candidates(fx.session(deal_summary="They offer: Gold")) == []
+
+    def test_deal_session_offers_accept_and_reject_through_the_dialogue(self):
+        cands = diplomacy_candidates(fx.session(deal_summary="They offer: Gold"))
+        assert _ids(cands) == ["diplomacy:1:NEGATIVE", "diplomacy:1:POSITIVE"]
+        assert {c.label for c in cands} == {"Accept the deal", "Reject the deal"}
+
+    def test_diplomacy_candidates_include_exit_only_when_allowed(self):
+        plain = diplomacy_candidates(fx.session(), allow_exit=False)
+        with_exit = diplomacy_candidates(fx.session(), allow_exit=True)
+        assert not any(c.params.response == "EXIT" for c in plain)
+        exit_c = next(c for c in with_exit if c.params.response == "EXIT")
+        assert exit_c.label == "Close the screen"
+        assert exit_c.kind is ActionKind.DIPLOMACY_RESPOND
 
     def test_deal_accept_or_reject(self):
         assert _ids(deal_candidates(fx.deal())) == ["deal:1:accept", "deal:1:reject"]

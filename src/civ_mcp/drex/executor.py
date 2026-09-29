@@ -407,7 +407,7 @@ class Executor:
                     (x for x in sessions if x.other_player_id == p.other_player_id),
                     None,
                 )
-                if s is None or s.is_at_war or s.buttons == "GOODBYE" or s.deal_summary:
+                if s is None or s.is_at_war or s.buttons == "GOODBYE":
                     return _no("session_not_open_for_response")
                 return _ok(dedup=(s.dialogue_text, s.reason_text, s.buttons))
 

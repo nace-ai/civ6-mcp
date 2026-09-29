@@ -255,6 +255,10 @@ class FakeGame:
         return blockers
 
     # ---------------------------------------------------------------- actions
+    async def dismiss_popup(self):
+        self._record("dismiss_popup")
+        return "Dismissed nothing"
+
     async def set_research(self, tech):
         fail = self._record("set_research", tech)
         if "set_research" not in self.ignore:
