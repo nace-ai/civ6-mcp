@@ -13,6 +13,16 @@ from civ_mcp.lua._helpers import SENTINEL
 
 
 @dataclass
+class CityAttackTarget:
+    x: int
+    y: int
+    unit_type: str
+    owner_id: int
+    hp: int
+    max_hp: int
+
+
+@dataclass
 class PromotableUnit:
     unit_id: int
     unit_index: int
@@ -96,3 +106,50 @@ UI.RequestPlayerOperation(me, PlayerOperations.ADD_BELIEF, p)
 print("OK:BELIEF_ADDED|" .. Locale.Lookup(b.Name))
 print("{SENTINEL}")
 """
+
+
+def build_city_attack_targets_query(city_id: int) -> str:
+    """InGame: hostile units the city may range-attack right now, from the
+    engine's own target list (the same call ``build_city_attack`` checks)."""
+    return f"""
+local me = Game.GetLocalPlayer()
+local pCity = Players[me]:GetCities():FindID({city_id} % 65536)
+if pCity == nil then print("ERR:CITY_NOT_FOUND"); print("{SENTINEL}"); return end
+local w = Map.GetGridSize()
+local targets = CityManager.GetCommandTargets(pCity, CityCommandTypes.RANGE_ATTACK)
+if targets then
+  for _, tbl in pairs(targets) do
+    if type(tbl) == "table" then
+      for _, idx in ipairs(tbl) do
+        local x, y = idx % w, math.floor(idx / w)
+        local pu = Map.GetUnitsAt(x, y)
+        if pu then
+          for u in pu:Units() do
+            if u:GetOwner() ~= me then
+              local info = GameInfo.Units[u:GetType()]
+              print("TARGET|" .. x .. "|" .. y .. "|" .. (info and info.UnitType or "UNKNOWN") .. "|" .. u:GetOwner() .. "|" .. (u:GetMaxDamage() - u:GetDamage()) .. "|" .. u:GetMaxDamage())
+            end
+          end
+        end
+      end
+    end
+  end
+end
+print("{SENTINEL}")
+"""
+
+
+def parse_city_attack_targets(lines: list[str]) -> list[CityAttackTarget]:
+    out: list[CityAttackTarget] = []
+    for line in lines:
+        if not line.startswith("TARGET|"):
+            continue
+        p = line.split("|")
+        if len(p) < 7:
+            continue
+        out.append(
+            CityAttackTarget(
+                int(p[1]), int(p[2]), p[3], int(p[4]), int(p[5]), int(p[6])
+            )
+        )
+    return out

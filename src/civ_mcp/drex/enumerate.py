@@ -16,6 +16,7 @@ from civ_mcp.drex.candidates import (
     AttackParams,
     BeliefParams,
     Candidate,
+    CityAttackParams,
     CivicParams,
     DealParams,
     DedicationParams,
@@ -25,6 +26,7 @@ from civ_mcp.drex.candidates import (
     FoundReligionParams,
     GovernmentParams,
     GreatPersonParams,
+    HoldFireParams,
     ImproveParams,
     KeepGovernmentParams,
     MoveParams,
@@ -39,6 +41,7 @@ from civ_mcp.drex.candidates import (
     UnitRef,
     WaitParams,
 )
+from civ_mcp.drex.hexgrid import hex_distance
 
 _PREFIXES = (
     "UNIT_",
@@ -604,6 +607,35 @@ def belief_candidates(status: lq.ReligionFoundingStatus) -> list[Candidate]:
                     facts={"effect": b.description, "class": cls},
                 )
             )
+    return out
+
+
+def city_attack_candidates(city: lq.CityInfo, targets: list[Any]) -> list[Candidate]:
+    """One ranged attack per engine-listed target, plus holding fire. With no
+    targets only "hold fire" remains, which the single-legal-option rule
+    executes without a Drex call."""
+    out: list[Candidate] = [
+        Candidate.create(
+            ActionKind.CITY_ATTACK,
+            CityAttackParams(city.city_id, t.x, t.y, t.unit_type),
+            label=f"Attack {pretty(t.unit_type.replace('UNIT_', ''))} at ({t.x},{t.y})",
+            facts={
+                "unit": t.unit_type,
+                "owner": t.owner_id,
+                "hp": f"{t.hp}/{t.max_hp}",
+                "distance": hex_distance(city.x, city.y, t.x, t.y),
+            },
+        )
+        for t in targets
+    ]
+    out.append(
+        Candidate.create(
+            ActionKind.HOLD_FIRE,
+            HoldFireParams(city.city_id),
+            label=f"Hold fire in {city.name}",
+            facts={},
+        )
+    )
     return out
 
 

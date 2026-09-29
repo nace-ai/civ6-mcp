@@ -166,6 +166,15 @@ class GameState:
         lines = await self.conn.execute_read(lq_drex.build_promotable_units_query())
         return lq_drex.parse_promotable_units(lines)
 
+    async def get_city_attack_targets(
+        self, city_id: int
+    ) -> list[lq_drex.CityAttackTarget]:
+        """InGame: hostile units this city can range-attack now."""
+        lines = await self.conn.execute_write(
+            lq_drex.build_city_attack_targets_query(city_id)
+        )
+        return lq_drex.parse_city_attack_targets(lines)
+
     async def add_belief(self, belief_type: str) -> str:
         """InGame: add a belief to our religion."""
         lines = await self.conn.execute_write(lq_drex.build_add_belief(belief_type))

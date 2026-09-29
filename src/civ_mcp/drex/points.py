@@ -14,6 +14,7 @@ from civ_mcp.drex.candidates import (
 )
 from civ_mcp.drex.enumerate import (
     belief_candidates,
+    city_attack_candidates,
     civic_candidates,
     deal_candidates,
     dedication_candidates,
@@ -57,6 +58,7 @@ QUESTIONS: dict[DecisionCategory, str] = {
     DecisionCategory.GREAT_PERSON: "Should the empire claim a Great Person now, and how?",
     DecisionCategory.RELIGION: "Which choice should the empire make to found its religion?",
     DecisionCategory.BELIEF: "Which belief should the empire add to its religion?",
+    DecisionCategory.CITY_ATTACK: "Should this city fire its ranged attack, and at whom?",
 }
 
 
@@ -124,6 +126,13 @@ def _enumerate(
         )
     if cat is DecisionCategory.PANTHEON and inputs.pantheon is not None:
         return pantheon_candidates(inputs.pantheon), [], entity, inputs
+    if (
+        cat is DecisionCategory.CITY_ATTACK
+        and inputs.city_attack_city is not None
+        and inputs.city_targets is not None
+    ):
+        cands = city_attack_candidates(inputs.city_attack_city, inputs.city_targets)
+        return cands, [], entity, inputs
     if cat is DecisionCategory.RELIGION and inputs.religion is not None:
         partial = inputs.religion_partial or {}
         return religion_candidates(inputs.religion, partial), [], entity, inputs

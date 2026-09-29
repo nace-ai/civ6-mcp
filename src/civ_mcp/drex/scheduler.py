@@ -40,6 +40,7 @@ SCHEDULER_ORDER = (
     "dedication: when COMMEMORATION_AVAILABLE blocks",
     "religion: when RELIGION blocks (religion, follower belief, then found)",
     "belief: when BELIEF blocks",
+    "city_attack: when CITY/DISTRICT_RANGE_ATTACK blocks, per city, ascending id",
     "research: only when none selected",
     "civic: only when none selected",
     "production: empty queues, ascending city id",
@@ -55,6 +56,9 @@ PANTHEON_BLOCKER = "ENDTURN_BLOCKING_PANTHEON"
 DEDICATION_BLOCKER = "ENDTURN_BLOCKING_COMMEMORATION_AVAILABLE"
 RELIGION_BLOCKER = "ENDTURN_BLOCKING_RELIGION"
 BELIEF_BLOCKER = "ENDTURN_BLOCKING_BELIEF"
+CITY_ATTACK_BLOCKERS = frozenset(
+    {"ENDTURN_BLOCKING_CITY_RANGE_ATTACK", "ENDTURN_BLOCKING_DISTRICT_RANGE_ATTACK"}
+)
 GOVERNOR_BLOCKERS = frozenset(
     {
         "ENDTURN_BLOCKING_GOVERNOR_APPOINTMENT",
@@ -81,6 +85,7 @@ SUPPORTED_BLOCKERS = frozenset(
         CLAIM_BLOCKER,
         RELIGION_BLOCKER,
         BELIEF_BLOCKER,
+        *CITY_ATTACK_BLOCKERS,
     }
 )
 # Informational blockers that execute_end_turn clears and logs as housekeeping.
@@ -321,6 +326,14 @@ class Scheduler:
             spec = DecisionSpec(DecisionCategory.BELIEF, "empire")
             if self._open(ledger, spec):
                 return spec
+
+        if blockers & CITY_ATTACK_BLOCKERS:
+            for city in sorted(core.cities, key=lambda c: c.city_id):
+                spec = DecisionSpec(
+                    DecisionCategory.CITY_ATTACK, f"city:{city.city_id}"
+                )
+                if self._open(ledger, spec):
+                    return spec
 
         if PROMOTION_BLOCKER in blockers:
             for pu in sorted(core.promotable, key=lambda u: u.unit_id):

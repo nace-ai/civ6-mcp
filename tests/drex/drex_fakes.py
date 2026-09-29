@@ -80,6 +80,7 @@ class FakeGame:
         self.dedication_status = fx.dedications()
         self.great_people: list = []
         self.religion_status = fx.religion_founding()
+        self.city_targets: dict[int, list] = {}
         self.fail: dict[str, tuple[Exception, bool]] = {}
         self.ignore: set[str] = set()
         self.end_turn_calls = 0
@@ -280,6 +281,11 @@ class FakeGame:
         if any(u.unit_id == unit_id for u in self.promotable):
             return fx.warrior_promotions()
         return lq.UnitPromotionStatus(unit_id, unit_id % 65536, "UNIT_WARRIOR")
+
+    async def get_city_attack_targets(self, city_id):
+        self.query_counts["get_city_attack_targets"] += 1
+        self.conn.roundtrips += 1
+        return [copy.deepcopy(t) for t in self.city_targets.get(city_id, [])]
 
     async def get_religion_founding_status(self):
         self.query_counts["get_religion_founding_status"] += 1
@@ -505,6 +511,15 @@ class FakeGame:
         self._governor_blockers_done()
         self._after(fail)
         return "PROMOTED|Pingala with Librarian"
+
+    async def city_attack(self, city_id, target_x, target_y):
+        fail = self._record("city_attack", city_id, target_x, target_y)
+        self.city_targets[city_id] = []
+        self.extra_blockers = [
+            b for b in self.extra_blockers if "RANGE_ATTACK" not in b[0]
+        ]
+        self._after(fail)
+        return f"CITY_RANGE_ATTACK|Roma -> UNIT_WARRIOR@{target_x},{target_y}|pre_hp:80/100"
 
     async def found_religion(self, religion_type, follower_belief, founder_belief):
         fail = self._record(

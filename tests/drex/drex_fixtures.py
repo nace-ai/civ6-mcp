@@ -545,3 +545,12 @@ def religion_founding():
             ],
         },
     )
+
+
+def city_targets():
+    from civ_mcp.lua.drex_queries import CityAttackTarget
+
+    return [
+        CityAttackTarget(11, 12, "UNIT_WARRIOR", 63, 80, 100),
+        CityAttackTarget(12, 12, "UNIT_SLINGER", 63, 30, 100),
+    ]

@@ -24,8 +24,17 @@ from civ_mcp.drex.candidates import (
     ProductionParams,
     UnitOrderParams,
 )
+from civ_mcp.drex.hexgrid import hex_distance
 from civ_mcp.drex.observation import CoreObservation
 from civ_mcp.spectator import CameraController, PopupWatcher
+
+__all__ = [
+    "CameraPacer",
+    "LiveSpectator",
+    "Spectator",
+    "focus_point",
+    "hex_distance",
+]
 
 if TYPE_CHECKING:
     from civ_mcp.connection import GameConnection
@@ -43,19 +52,6 @@ class Spectator(Protocol):
     def popup_status(self, state: str) -> None: ...
 
     def quiet(self, on: bool) -> None: ...
-
-
-def hex_distance(x1: int, y1: int, x2: int, y2: int) -> int:
-    """Tile distance on Civ 6's offset hex grid (odd rows shifted right)."""
-
-    def cube(x: int, y: int) -> tuple[int, int]:
-        q = x - (y - (y & 1)) // 2
-        return q, y
-
-    q1, r1 = cube(x1, y1)
-    q2, r2 = cube(x2, y2)
-    dq, dr = q1 - q2, r1 - r2
-    return (abs(dq) + abs(dr) + abs(dq + dr)) // 2
 
 
 class CameraPacer:

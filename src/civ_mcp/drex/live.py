@@ -231,6 +231,14 @@ class LiveObserver:
                 return DecisionInputs(pantheon=await gs.get_pantheon_status())
             case DecisionCategory.RESEARCH | DecisionCategory.CIVIC:
                 return DecisionInputs(progress=core.progress)
+            case DecisionCategory.CITY_ATTACK:
+                city = core.city(eid)
+                if city is None:
+                    return DecisionInputs()
+                return DecisionInputs(
+                    city_attack_city=city,
+                    city_targets=await gs.get_city_attack_targets(city.city_id),
+                )
             case DecisionCategory.RELIGION | DecisionCategory.BELIEF:
                 return DecisionInputs(religion=await gs.get_religion_founding_status())
             case DecisionCategory.GREAT_PERSON:

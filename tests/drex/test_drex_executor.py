@@ -15,6 +15,7 @@ from civ_mcp.drex.candidates import (
 )
 from civ_mcp.drex.enumerate import (
     belief_candidates,
+    city_attack_candidates,
     civic_candidates,
     deal_candidates,
     dedication_candidates,
@@ -196,6 +197,16 @@ DISPATCH_CASES.append(
         ("choose_dedication", (0,)),
     )
 )
+DISPATCH_CASES.append(
+    (
+        _cand(
+            city_attack_candidates(fx.capital(), fx.city_targets()),
+            ActionKind.CITY_ATTACK,
+            lambda c: (c.params.target_x, c.params.target_y) == (11, 12),
+        ),
+        ("city_attack", (fx.CAPITAL_ID, 11, 12)),
+    )
+)
 _FOUND = religion_candidates(
     fx.religion_founding(),
     {"religion_type": "RELIGION_BUDDHISM", "follower_belief": "BELIEF_CHORAL_MUSIC"},
@@ -291,9 +302,7 @@ NO_DISPATCH_KINDS = {
 }
 # Phase 2 kinds whose candidate builders and fakes land in later tasks; each
 # task removes its kinds here and adds them to DISPATCH_CASES.
-PENDING_KINDS = {
-    ActionKind.CITY_ATTACK,
-}
+PENDING_KINDS: set[ActionKind] = set()  # every Phase 2 kind has landed
 
 
 def test_every_action_kind_has_a_dispatch_case():
@@ -316,6 +325,7 @@ def test_executor_performs_the_mapped_call_and_confirms_or_acknowledges(cand, ex
     game.promotable = [fx.promotable_warrior()]
     game.governor_status = fx.governors(points=1, unassigned=True)
     game.great_people = fx.great_people()
+    game.city_targets = {fx.CAPITAL_ID: fx.city_targets()}
     outcome = _run(game, cand)
     assert game.calls == [expected]
     assert outcome.dispatched is True

@@ -529,6 +529,17 @@ class Executor:
             ):
                 return _ok()
 
+            case ActionKind.CITY_ATTACK:
+                known = self._known.city_targets if self._known is not None else None
+                targets = (
+                    known
+                    if known is not None
+                    else await gs.get_city_attack_targets(p.city_id)
+                )
+                if not any((t.x, t.y) == (p.target_x, p.target_y) for t in targets):
+                    return _no("target_not_available")
+                return _ok()
+
             case ActionKind.FOUND_RELIGION:
                 known = self._known.religion if self._known is not None else None
                 st = (
@@ -868,6 +879,15 @@ class Executor:
                 if await self._poll(cleared):
                     return confirmed("government_prompt_cleared")
                 return self._unconfirmed(raw, "government_prompt_still_blocking")
+
+            case ActionKind.CITY_ATTACK:
+                if raw.startswith(("CITY_RANGE_ATTACK|", "OK:CITY_RANGE_ATTACK|")):
+                    return confirmed("city_attack_confirmed_from_dispatch")
+                if _game_error(raw):
+                    return self._unconfirmed(raw, "attack_refused")
+                return ActionOutcome(
+                    OutcomeStatus.PENDING, "combat_resolution_async", True
+                )
 
             case ActionKind.FOUND_RELIGION:
                 if raw.startswith(("RELIGION_FOUNDED|", "OK:RELIGION_FOUNDED|")):
