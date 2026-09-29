@@ -153,3 +153,25 @@ def parse_city_attack_targets(lines: list[str]) -> list[CityAttackTarget]:
             )
         )
     return out
+
+
+def build_end_turn_blocking_types_query() -> str:
+    """InGame: dump the engine's ``EndTurnBlockingTypes`` enum (name|value)."""
+    return f"""
+for k, v in pairs(EndTurnBlockingTypes) do print("BT|" .. tostring(k) .. "|" .. tostring(v)) end
+print("{SENTINEL}")
+"""
+
+
+def parse_end_turn_blocking_types(lines: list[str]) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for line in lines:
+        if not line.startswith("BT|"):
+            continue
+        p = line.split("|")
+        if len(p) >= 3:
+            try:
+                out[p[1]] = int(p[2])
+            except ValueError:
+                continue
+    return out

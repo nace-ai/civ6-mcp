@@ -71,6 +71,7 @@ GOVERNOR_BLOCKERS = frozenset(
 SUPPORTED_BLOCKERS = frozenset(
     {
         "ENDTURN_BLOCKING_UNITS",
+        "ENDTURN_BLOCKING_UNIT_NEEDS_ORDERS",
         "ENDTURN_BLOCKING_STACKED_UNITS",
         "ENDTURN_BLOCKING_PRODUCTION",
         "ENDTURN_BLOCKING_RESEARCH",
@@ -90,6 +91,23 @@ SUPPORTED_BLOCKERS = frozenset(
 )
 # Informational blockers that execute_end_turn clears and logs as housekeeping.
 HOUSEKEEPING_BLOCKERS = frozenset({"ENDTURN_BLOCKING_WORLD_CONGRESS_LOOK"})
+# Engine blockers whose decision kinds are scheduled for later phases (spec
+# Section 8). Listing them here is a deliberate classification: the run waits
+# on them (unsupported_blocker) rather than stopping, and
+# tests/drex/test_blocker_coverage.py fails if the engine has a type nobody
+# classified.
+PHASE_LATER_BLOCKERS = frozenset(
+    {
+        "ENDTURN_BLOCKING_CONSIDER_RAZE_CITY",
+        "ENDTURN_BLOCKING_CONSIDER_DISLOYAL_CITY",
+        "ENDTURN_BLOCKING_SPY_CHOOSE_ESCAPE_ROUTE",
+        "ENDTURN_BLOCKING_SPY_CHOOSE_DRAGNET_PRIORITY",
+        "ENDTURN_BLOCKING_ARTIFACT",
+        "ENDTURN_BLOCKING_EMERGENCY_NEEDS_ATTENTION",
+        "ENDTURN_BLOCKING_WORLD_CONGRESS_SESSION",
+        "ENDTURN_BLOCKING_WORLD_CONGRESS_SPECIAL_SESSION",
+    }
+)
 
 
 @dataclass

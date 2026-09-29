@@ -166,6 +166,13 @@ class GameState:
         lines = await self.conn.execute_read(lq_drex.build_promotable_units_query())
         return lq_drex.parse_promotable_units(lines)
 
+    async def get_end_turn_blocking_types(self) -> dict[str, int]:
+        """InGame: the engine's EndTurnBlockingTypes enum, for coverage checks."""
+        lines = await self.conn.execute_write(
+            lq_drex.build_end_turn_blocking_types_query()
+        )
+        return lq_drex.parse_end_turn_blocking_types(lines)
+
     async def get_city_attack_targets(
         self, city_id: int
     ) -> list[lq_drex.CityAttackTarget]:
