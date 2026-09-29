@@ -38,6 +38,12 @@ class GameConnection:
         self.gamecore_index: int | None = None
         self.ingame_index: int | None = None
         self._replay_on_disconnect = True
+        self.roundtrips = 0
+        self.roundtrip_ms = 0.0
+
+    def snapshot_counters(self) -> tuple[int, float]:
+        """(round trips so far, cumulative milliseconds) for attribution."""
+        return self.roundtrips, self.roundtrip_ms
 
     @contextlib.contextmanager
     def replay_disabled(self) -> Iterator[None]:
@@ -173,6 +179,19 @@ class GameConnection:
         self, state_index: int, lua_code: str, timeout: float
     ) -> list[str]:
         """Inner execute — must be called while holding self._lock."""
+        assert self._reader is not None
+        assert self._writer is not None
+        loop = asyncio.get_running_loop()
+        t0 = loop.time()
+        try:
+            return await self._locked_execute_inner(state_index, lua_code, timeout)
+        finally:
+            self.roundtrips += 1
+            self.roundtrip_ms += (loop.time() - t0) * 1000.0
+
+    async def _locked_execute_inner(
+        self, state_index: int, lua_code: str, timeout: float
+    ) -> list[str]:
         assert self._reader is not None
         assert self._writer is not None
 
