@@ -412,3 +412,94 @@ def test_pending_world_congress_stops_without_retrying(tmp_path):
     result = asyncio.run(runner.run())
     assert result.stop_reason == "unsupported_blocker:world_congress"
     assert attempts == 1 and checkpoints == [5]
+
+
+def test_move_is_followed_by_partial_refresh_not_full_observe(tmp_path):
+    class TracingGame(FakeGame):
+        def __init__(self):
+            super().__init__()
+            self.trace = []
+
+        async def get_units(self):
+            self.trace.append("get_units")
+            return await super().get_units()
+
+        async def get_cities(self):
+            self.trace.append("get_cities")
+            return await super().get_cities()
+
+        async def move_unit(self, unit_index, x, y, *a, **kw):
+            self.trace.append("move_unit")
+            return await super().move_unit(unit_index, x, y, *a, **kw)
+
+    game = TracingGame()
+    runner, _ = _runner(
+        game,
+        tmp_path,
+        selector=PreferSelector(prefixes=("move:", "research:", "produce:", "skip:")),
+    )
+    asyncio.run(runner.run())
+    i = game.trace.index("move_unit")
+    after = game.trace[i + 1 :]
+    assert after and after[0] == "get_units"
+    # cities are not re-read until the pre-end-turn full observe
+    assert "get_cities" not in after[: after.index("get_units") + 1]
+
+
+def test_full_observe_precedes_end_turn_after_partial_refreshes(tmp_path):
+    class TracingGame(FakeGame):
+        def __init__(self):
+            super().__init__()
+            self.trace = []
+
+        async def get_cities(self):
+            self.trace.append("get_cities")
+            return await super().get_cities()
+
+        async def skip_unit(self, unit_index):
+            self.trace.append("skip_unit")
+            return await super().skip_unit(unit_index)
+
+    game = TracingGame()
+    normal = _fake_end_turn(game)
+
+    async def end_turn(gs):
+        game.trace.append("end_turn")
+        return await normal(gs)
+
+    log = DecisionLog(tmp_path / "run.jsonl", run_id="drex-test", secrets=[])
+    runner = Runner(game, PreferSelector(), log, RunConfig(turns=1), end_turn=end_turn)
+    asyncio.run(runner.run())
+    last_skip = len(game.trace) - 1 - game.trace[::-1].index("skip_unit")
+    between = game.trace[last_skip + 1 : game.trace.index("end_turn")]
+    # unit orders refresh units only; a full read (cities included) must run
+    # before the turn is ended
+    assert "get_cities" in between, game.trace
+
+
+def test_no_redundant_full_read_when_nothing_was_dispatched(tmp_path):
+    class TracingGame(FakeGame):
+        def __init__(self):
+            super().__init__()
+            self.trace = []
+
+        async def get_units(self):
+            self.trace.append("get_units")
+            return await super().get_units()
+
+    game = TracingGame()
+    game.research = "TECHNOLOGY_POTTERY"
+    game.cities[fx.CAPITAL_ID].currently_building = "UNIT_SCOUT"
+    for u in game.units.values():
+        u.moves_remaining = 0
+    normal = _fake_end_turn(game)
+
+    async def end_turn(gs):
+        game.trace.append("end_turn")
+        return await normal(gs)
+
+    log = DecisionLog(tmp_path / "run.jsonl", run_id="drex-test", secrets=[])
+    runner = Runner(game, PreferSelector(), log, RunConfig(turns=1), end_turn=end_turn)
+    asyncio.run(runner.run())
+    before_end = game.trace[: game.trace.index("end_turn")]
+    assert before_end.count("get_units") == 1, game.trace

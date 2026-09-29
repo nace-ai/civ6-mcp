@@ -12,19 +12,18 @@ import asyncio
 import logging
 import re
 from dataclasses import dataclass, field
-
 from typing import TYPE_CHECKING
 
 from civ_mcp import lua as lq
 from civ_mcp.connection import GameConnection
 from civ_mcp.lua.batch import build_batch, split_batch
-from civ_mcp.spectator import POPUP_STATUS_LUA
 from civ_mcp.narrate import (
     narrate_combat_estimate,
     narrate_move_discoveries,
     narrate_settle_candidates,
     narrate_test_trade,
 )
+from civ_mcp.spectator import POPUP_STATUS_LUA
 
 if TYPE_CHECKING:
     from civ_mcp.spatial import SpatialTracker
@@ -1860,6 +1859,7 @@ class GameState:
     async def load_save(self, save_index: int) -> str:
         """Load a save file by index."""
         import time
+
         from civ_mcp.game_lifecycle import load_save
 
         result = await load_save(self.conn, save_index)

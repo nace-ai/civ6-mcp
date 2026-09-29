@@ -100,6 +100,7 @@ class FakeGame:
         return (self.civ, self.seed)
 
     async def get_game_overview(self):
+        self.query_counts["get_game_overview"] += 1
         research = "None"
         if self.research:
             research = next(
@@ -122,6 +123,7 @@ class FakeGame:
         return status
 
     async def get_progress_types(self):
+        self.query_counts["get_progress_types"] += 1
         return lq.ProgressTypes(self.research, self.civic)
 
     async def check_eligibility(self, kind, type_name):
@@ -134,6 +136,7 @@ class FakeGame:
         return (type_name in types, "engine")
 
     async def get_cities(self):
+        self.query_counts["get_cities"] += 1
         return [copy.deepcopy(c) for c in self.cities.values()], []
 
     async def list_city_production(self, city_id):
@@ -189,9 +192,11 @@ class FakeGame:
         return (x, y) in self.founded
 
     async def get_diplomacy_sessions(self):
+        self.query_counts["get_diplomacy_sessions"] += 1
         return copy.deepcopy(self.sessions)
 
     async def get_pending_deals(self):
+        self.query_counts["get_pending_deals"] += 1
         return copy.deepcopy(self.deals)
 
     async def get_policies(self):
@@ -212,6 +217,7 @@ class FakeGame:
         return copy.deepcopy(self.pantheon_status)
 
     async def get_end_turn_blockers(self):
+        self.query_counts["get_end_turn_blockers"] += 1
         blockers = list(self.extra_blockers)
         if self.research is None:
             blockers.append(("ENDTURN_BLOCKING_RESEARCH", "Choose research"))

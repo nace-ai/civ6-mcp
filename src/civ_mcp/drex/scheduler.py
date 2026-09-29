@@ -76,6 +76,7 @@ class TurnLedger:
     failures: Counter[str] = field(default_factory=Counter)
     failed_candidates: set[str] = field(default_factory=set)
     decisions: int = 0
+    full_observed: bool = False
 
 
 def key_for(spec: DecisionSpec) -> str:

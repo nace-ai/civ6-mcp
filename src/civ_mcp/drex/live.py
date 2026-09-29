@@ -98,18 +98,62 @@ class LiveObserver:
     async def reactive(self, previous: CoreObservation) -> CoreObservation:
         """Refresh only sessions and deals, e.g. while an end turn is in flight
         and the AI is still processing (heavier queries risk stalling it)."""
-        sessions = await self.gs.get_diplomacy_sessions()
-        deals = await self.gs.get_pending_deals()
+        return await self.refresh(previous, frozenset({"sessions", "deals"}))
+
+    async def refresh(
+        self, previous: CoreObservation, parts: frozenset[str]
+    ) -> CoreObservation:
+        """Re-read only ``parts`` of the observation; everything else is kept
+        from ``previous``. The version is bumped so stale decisions are still
+        rejected."""
+        gs = self.gs
+        changes: dict[str, Any] = {}
+        if hasattr(gs, "get_core_snapshot"):
+            snap = await gs.get_core_snapshot(frozenset(parts))
+            mapping = (
+                ("overview", "overview"),
+                ("tech", "tech"),
+                ("progress", "progress"),
+                ("cities", "cities"),
+                ("units", "units"),
+                ("sessions", "diplomacy_sessions"),
+                ("deals", "pending_deals"),
+            )
+            for part, attr in mapping:
+                if part in parts and getattr(snap, part) is not None:
+                    changes[attr] = getattr(snap, part)
+            if "blockers" in parts and snap.blockers is not None:
+                changes["blockers"] = [Blocker(t, m) for t, m in snap.blockers]
+            if "popup" in parts and snap.popup_state is not None:
+                changes["popup_state"] = snap.popup_state
+            failed = [
+                p for p in parts if p not in ("identity", "popup") and p in snap.errors
+            ]
+            if failed:
+                raise ConnectionError(f"refresh failed for {failed}: {snap.errors}")
+        else:
+            if "overview" in parts:
+                changes["overview"] = await gs.get_game_overview()
+            if "tech" in parts:
+                changes["tech"] = await gs.get_tech_civics()
+            if "progress" in parts:
+                changes["progress"] = await gs.get_progress_types()
+            if "cities" in parts:
+                changes["cities"] = (await gs.get_cities())[0]
+            if "units" in parts:
+                changes["units"] = await gs.get_units()
+            if "sessions" in parts:
+                changes["diplomacy_sessions"] = await gs.get_diplomacy_sessions()
+            if "deals" in parts:
+                changes["pending_deals"] = await gs.get_pending_deals()
+            if "blockers" in parts:
+                changes["blockers"] = [
+                    Blocker(t, m) for t, m in await gs.get_end_turn_blockers()
+                ]
         self._counter += 1
-        self._version = (
-            f"{previous.civ}:{previous.seed}:T{previous.turn}:{self._counter}"
-        )
-        return dataclasses.replace(
-            previous,
-            version=self._version,
-            diplomacy_sessions=sessions,
-            pending_deals=deals,
-        )
+        turn = changes.get("overview", previous.overview).turn
+        self._version = f"{previous.civ}:{previous.seed}:T{turn}:{self._counter}"
+        return dataclasses.replace(previous, version=self._version, **changes)
 
     async def _wonder_types(self, identity: tuple[str, int]) -> set[str]:
         if self._wonders is None or self._wonders[0] != identity:

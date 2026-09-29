@@ -15,6 +15,7 @@ from civ_mcp.drex.executor import Executor, dispatch_call
 from civ_mcp.drex.live import LiveObserver
 from civ_mcp.drex.observation import CoreObservation, DecisionMemory, Fact
 from civ_mcp.drex.points import build_decision_point
+from civ_mcp.drex.refresh import refresh_parts
 from civ_mcp.drex.scheduler import SCHEDULER_ORDER, EndTurn, Scheduler, Stop, TurnLedger
 from civ_mcp.drex.selectors import SelectionPaused, Selector, build_request, select
 from civ_mcp.drex.serialize import to_jsonable
@@ -116,11 +117,16 @@ class Runner:
         self._last_core: CoreObservation | None = None
 
     async def _observe(
-        self, *, reactive_from: CoreObservation | None = None
+        self,
+        *,
+        reactive_from: CoreObservation | None = None,
+        refresh: tuple[frozenset[str], CoreObservation] | None = None,
     ) -> CoreObservation:
         t0 = time.perf_counter()
         if reactive_from is not None:
             core = await self.observer.reactive(reactive_from)
+        elif refresh is not None:
+            core = await self.observer.refresh(refresh[1], refresh[0])
         else:
             core = await self.observer.core()
         self._game_ms += (time.perf_counter() - t0) * 1000.0
@@ -171,7 +177,7 @@ class Runner:
                 "scheduler_order": list(SCHEDULER_ORDER),
             },
         )
-        ledger = TurnLedger(turn=core.turn)
+        ledger = TurnLedger(turn=core.turn, full_observed=True)
         close_attempts: dict[tuple[int, int], int] = {}
         # An end-turn request the game is still processing (AI turn paused on
         # a proposal): only sessions and deals are observed until it resumes.
@@ -187,7 +193,9 @@ class Runner:
             if core.game_identity != identity:
                 return await self._stop("game_identity_changed", core, checkpoint=False)
             if core.turn != ledger.turn:
-                ledger = TurnLedger(turn=core.turn)
+                # A new turn always starts from the full observation taken
+                # after the end turn advanced.
+                ledger = TurnLedger(turn=core.turn, full_observed=True)
 
             informational = self.scheduler.informational_sessions(core)
             if informational and not self.cfg.dry_run:
@@ -232,6 +240,12 @@ class Runner:
                 return await self._stop(step.reason, core, checkpoint=True)
 
             if isinstance(step, EndTurn):
+                if not in_flight and not ledger.full_observed:
+                    # Safety net for partial refreshes: one full read per turn
+                    # before the turn is ended.
+                    ledger.full_observed = True
+                    core = await self._observe()
+                    continue
                 if not in_flight:
                     unsupported = self.scheduler.unsupported_blockers(core)
                     if unsupported:
@@ -415,7 +429,17 @@ class Runner:
                     },
                 },
             )
-            core = await self._observe(reactive_from=core if in_flight else None)
+            if in_flight:
+                core = await self._observe(reactive_from=core)
+            elif outcome.dispatched:
+                core = await self._observe(
+                    refresh=(refresh_parts(candidate.kind), core)
+                )
+                ledger.full_observed = False
+            else:
+                core = await self._observe(
+                    refresh=(frozenset({"blockers", "popup"}), core)
+                )
 
     def _log_turn(self, outcome: EndTurnOutcome, elapsed_ms: float) -> None:
         self.log.write(
