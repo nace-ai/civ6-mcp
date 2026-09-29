@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import time
 import traceback
@@ -11,11 +12,17 @@ from dataclasses import dataclass
 from typing import Any
 
 from civ_mcp.connection import LuaError
-from civ_mcp.drex.candidates import ActionKind
+from civ_mcp.drex.candidates import ActionKind, DecisionCategory
 from civ_mcp.drex.decision_log import DecisionLog
 from civ_mcp.drex.executor import Executor, dispatch_call
 from civ_mcp.drex.live import LiveObserver
-from civ_mcp.drex.observation import CoreObservation, DecisionMemory, Fact
+from civ_mcp.drex.observation import (
+    CoreObservation,
+    DecisionInputs,
+    DecisionMemory,
+    DecisionSpec,
+    Fact,
+)
 from civ_mcp.drex.points import build_decision_point
 from civ_mcp.drex.refresh import refresh_parts
 from civ_mcp.drex.scheduler import SCHEDULER_ORDER, EndTurn, Scheduler, TurnLedger
@@ -158,6 +165,9 @@ class Runner:
         self._phase = "schedule"
         self._header_written = False
         self._io_ok = False
+        # (task, spec, observation it was read from): the next unit's inputs,
+        # read while Drex was choosing the current decision.
+        self._prefetch: tuple[asyncio.Task, DecisionSpec, CoreObservation] | None = None
         self._last_observe = {"ms": 0.0, "roundtrips": 0}
         self._turn_stats = {"decisions": 0, "api_ms": 0.0, "roundtrips": 0, "t0": 0.0}
 
@@ -189,6 +199,52 @@ class Runner:
         if self.spectator is not None:
             self.spectator.popup_status(core.popup_state)
         return core
+
+    def _start_prefetch(
+        self, step: DecisionSpec, core: CoreObservation, ledger: TurnLedger
+    ) -> None:
+        """While Drex chooses, read the next unit's inputs (C5)."""
+        self._drop_prefetch()
+        nxt = self.scheduler.peek(core, ledger, step)
+        if (
+            isinstance(nxt, DecisionSpec)
+            and nxt.category is DecisionCategory.UNIT
+            and nxt != step
+        ):
+            task = asyncio.create_task(self.observer.inputs(nxt, core))
+            self._prefetch = (task, nxt, core)
+
+    def _drop_prefetch(self) -> None:
+        if self._prefetch is not None:
+            task = self._prefetch[0]
+            self._prefetch = None
+            if not task.done():
+                task.cancel()
+
+    async def _take_inputs(
+        self, step: DecisionSpec, core: CoreObservation
+    ) -> DecisionInputs:
+        """Use the prefetched inputs when they are for this step and the unit is
+        unchanged since they were read; otherwise read fresh."""
+        pf = self._prefetch
+        self._prefetch = None
+        if pf is not None:
+            task, spec, before = pf
+            if not task.done():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await task
+            elif spec == step and not task.cancelled() and task.exception() is None:
+                unit_id = int(step.entity.split(":", 1)[1])
+                was, now = before.unit(unit_id), core.unit(unit_id)
+                if (
+                    was is not None
+                    and now is not None
+                    and (was.x, was.y, was.moves_remaining)
+                    == (now.x, now.y, now.moves_remaining)
+                ):
+                    return task.result()
+        return await self.observer.inputs(step, core)
 
     async def _wait_unsupported(
         self, core: CoreObservation, blockers: list[str]
@@ -286,6 +342,7 @@ class Runner:
                             )
                     await self._sleep(self.cfg.reconnect_backoff_s)
         finally:
+            self._drop_prefetch()
             if self.spectator is not None:
                 await self.spectator.stop()
 
@@ -522,7 +579,7 @@ class Runner:
                 core = await self._observe(reactive_from=core if in_flight else None)
                 continue
 
-            inputs = await self.observer.inputs(step, core)
+            inputs = await self._take_inputs(step, core)
             self._seq += 1
             decision_id = f"T{core.turn}#{self._seq:04d}"
             point, excluded = build_decision_point(
@@ -578,6 +635,7 @@ class Runner:
                 )
                 return await self._stop("dry_run_complete", core, checkpoint=False)
             self._current_decision_id = decision_id
+            self._start_prefetch(step, core, ledger)
             try:
                 result = await select(point, self.selector)
             except ControllerFilteringError as e:
@@ -618,6 +676,9 @@ class Runner:
                 )
                 return await self._stop("dry_run_complete", core, checkpoint=False)
 
+            # Prefetched reads must be complete before anything mutates.
+            if self._prefetch is not None and not self._prefetch[0].done():
+                await asyncio.wait([self._prefetch[0]])
             self._phase = "execute"
             outcome = await self.executor.execute(
                 candidate,

@@ -196,7 +196,7 @@ async def _run_live(args: argparse.Namespace, *, dry_run: bool) -> int:
             objective=args.objective,
             max_options=max_options,
             dry_run=dry_run,
-            game_dead_after_s=float(os.environ.get("GAME_DEAD_AFTER_S", 120.0)),
+            game_dead_after_s=float(os.environ.get("GAME_DEAD_AFTER_S", "120")),
         )
 
         async def _relaunch() -> str:

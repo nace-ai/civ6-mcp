@@ -324,11 +324,11 @@ def test_lua_error_while_reading_inputs_is_recovered_not_fatal(tmp_path):
 
     game = FakeGame()
     original = game.get_unit_action_space
-    broken_once = {"done": False}
+    failures = {"left": 2}  # the prefetch read and the fresh read that follows
 
     async def broken(unit_index):
-        if not broken_once["done"]:
-            broken_once["done"] = True
+        if failures["left"] > 0:
+            failures["left"] -= 1
             raise LuaError("ERR: attempt to index a nil value")
         return await original(unit_index)
 
@@ -581,3 +581,20 @@ def test_speed_record_written_per_advanced_turn_and_on_turn_called(tmp_path):
     assert speed[0]["decisions"] == sum(
         1 for r in _records(tmp_path) if r["type"] == "decision"
     )
+
+
+def test_only_terminal_stop_reasons_are_reachable():
+    import inspect
+    import re
+
+    from civ_mcp.drex import runner, scheduler
+
+    src = inspect.getsource(runner) + inspect.getsource(scheduler)
+    reasons = set(re.findall(r'_stop\(\s*f?"([a-z_:]+)', src))
+    assert reasons <= {
+        "turn_budget_reached",
+        "game_over",
+        "dry_run_complete",
+        "interrupted",
+    }, reasons
+    assert "class Stop" not in src

@@ -142,3 +142,45 @@ def test_live_observer_falls_back_to_individual_queries_without_snapshot():
     game = FakeGame()
     core = asyncio.run(LiveObserver(game).core())
     assert core.popup_state == "CLEAR" and core.turn == 5
+
+
+# ---------------------------------------------------------------- prefetch (C5)
+def test_next_inputs_are_prefetched_during_selection(tmp_path):
+    from drex_fakes import FakeGame
+    from test_drex_runner import PreferSelector, _fake_end_turn
+
+    from civ_mcp.drex.decision_log import DecisionLog
+    from civ_mcp.drex.runner import RunConfig, Runner
+
+    game = FakeGame()
+    order = []
+    orig_space = game.get_unit_action_space
+
+    async def spaced(idx):
+        order.append(("space", idx))
+        return await orig_space(idx)
+
+    game.get_unit_action_space = spaced
+
+    class SlowSelector(PreferSelector):
+        async def choose(self, point):
+            order.append(("choose", point.entity))
+            await asyncio.sleep(0)  # let the prefetch task run
+            await asyncio.sleep(0)
+            order.append(("chosen", point.entity))
+            return await super().choose(point)
+
+    log = DecisionLog(tmp_path / "run.jsonl", run_id="t", secrets=[])
+    runner = Runner(
+        game,
+        SlowSelector(prefixes=("skip:", "research:", "produce:")),
+        log,
+        RunConfig(turns=1),
+        end_turn=_fake_end_turn(game),
+    )
+    asyncio.run(runner.run())
+    # at least one action-space read happened between a 'choose' and its 'chosen'
+    assert any(
+        order[i][0] == "choose" and order[i + 1][0] == "space"
+        for i in range(len(order) - 1)
+    ), order

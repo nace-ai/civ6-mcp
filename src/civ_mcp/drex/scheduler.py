@@ -15,6 +15,7 @@ entity's candidates. Order (documented because it affects results):
 
 from __future__ import annotations
 
+import dataclasses
 from collections import Counter
 from dataclasses import dataclass, field
 
@@ -151,6 +152,22 @@ class Scheduler:
             for s in core.diplomacy_sessions
             if _informational(s, deal_players) and s.other_player_id not in exclude
         )
+
+    def peek(
+        self, core: CoreObservation, ledger: TurnLedger, after: DecisionSpec
+    ) -> DecisionSpec | EndTurn:
+        """What ``next`` would return once ``after`` is resolved, without
+        touching the real ledger (used to prefetch the next decision's reads)."""
+        trial = dataclasses.replace(
+            ledger,
+            resolved=set(ledger.resolved) | {key_for(after)},
+            counts=Counter(ledger.counts),
+            failures=Counter(ledger.failures),
+            failed_candidates=set(ledger.failed_candidates),
+            exit_offered=set(ledger.exit_offered),
+            stuck_sessions=set(ledger.stuck_sessions),
+        )
+        return self.next(core, trial)
 
     def session_exhausted(self, ledger: TurnLedger, spec: DecisionSpec) -> bool:
         """True once the failure budget for this session is spent: the next
