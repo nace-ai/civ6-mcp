@@ -77,6 +77,7 @@ class FakeGame:
         self.extra_blockers: list[tuple[str, str]] = []
         self.promotable: list = []  # Phase 2: units with a promotion available
         self.governor_status = fx.governors(points=0, unassigned=False)
+        self.dedication_status = fx.dedications()
         self.fail: dict[str, tuple[Exception, bool]] = {}
         self.ignore: set[str] = set()
         self.end_turn_calls = 0
@@ -277,6 +278,11 @@ class FakeGame:
         if any(u.unit_id == unit_id for u in self.promotable):
             return fx.warrior_promotions()
         return lq.UnitPromotionStatus(unit_id, unit_id % 65536, "UNIT_WARRIOR")
+
+    async def get_dedications(self):
+        self.query_counts["get_dedications"] += 1
+        self.conn.roundtrips += 1
+        return copy.deepcopy(self.dedication_status)
 
     async def get_governors(self):
         self.query_counts["get_governors"] += 1
@@ -487,6 +493,20 @@ class FakeGame:
         self._governor_blockers_done()
         self._after(fail)
         return "PROMOTED|Pingala with Librarian"
+
+    async def choose_dedication(self, dedication_index):
+        fail = self._record("choose_dedication", dedication_index)
+        choice = next(
+            c for c in self.dedication_status.choices if c.index == dedication_index
+        )
+        self.dedication_status.active.append(choice.name)
+        self.extra_blockers = [
+            b
+            for b in self.extra_blockers
+            if b[0] != "ENDTURN_BLOCKING_COMMEMORATION_AVAILABLE"
+        ]
+        self._after(fail)
+        return f"DEDICATION_CHOSEN|{choice.name}"
 
     async def promote_unit(self, unit_id, promotion_type):
         fail = self._record("promote_unit", unit_id, promotion_type)

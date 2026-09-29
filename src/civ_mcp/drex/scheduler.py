@@ -32,6 +32,7 @@ SCHEDULER_ORDER = (
     "pantheon: when PANTHEON blocks",
     "promotion: when UNIT_PROMOTION blocks, ascending unit id",
     "governor: when a GOVERNOR_* blocker stands (appoint / assign / promote)",
+    "dedication: when COMMEMORATION_AVAILABLE blocks",
     "research: only when none selected",
     "civic: only when none selected",
     "production: empty queues, ascending city id",
@@ -43,6 +44,7 @@ GOVERNMENT_BLOCKER = "ENDTURN_BLOCKING_CONSIDER_GOVERNMENT_CHANGE"
 POLICY_BLOCKER = "ENDTURN_BLOCKING_FILL_CIVIC_SLOT"
 ENVOY_BLOCKER = "ENDTURN_BLOCKING_GIVE_INFLUENCE_TOKEN"
 PANTHEON_BLOCKER = "ENDTURN_BLOCKING_PANTHEON"
+DEDICATION_BLOCKER = "ENDTURN_BLOCKING_COMMEMORATION_AVAILABLE"
 GOVERNOR_BLOCKERS = frozenset(
     {
         "ENDTURN_BLOCKING_GOVERNOR_APPOINTMENT",
@@ -65,6 +67,7 @@ SUPPORTED_BLOCKERS = frozenset(
         PANTHEON_BLOCKER,
         PROMOTION_BLOCKER,
         *GOVERNOR_BLOCKERS,
+        DEDICATION_BLOCKER,
     }
 )
 # Informational blockers that execute_end_turn clears and logs as housekeeping.
@@ -108,6 +111,7 @@ def key_for(spec: DecisionSpec) -> str:
         DecisionCategory.ENVOY,
         DecisionCategory.PANTHEON,
         DecisionCategory.GOVERNOR,
+        DecisionCategory.DEDICATION,
     ):
         return str(spec.category)
     return f"{spec.category}:{spec.entity_id}"
@@ -261,6 +265,11 @@ class Scheduler:
 
         if blockers & GOVERNOR_BLOCKERS:
             spec = DecisionSpec(DecisionCategory.GOVERNOR, "empire")
+            if self._open(ledger, spec):
+                return spec
+
+        if DEDICATION_BLOCKER in blockers:
+            spec = DecisionSpec(DecisionCategory.DEDICATION, "empire")
             if self._open(ledger, spec):
                 return spec
 

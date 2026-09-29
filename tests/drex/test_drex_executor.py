@@ -16,6 +16,7 @@ from civ_mcp.drex.candidates import (
 from civ_mcp.drex.enumerate import (
     civic_candidates,
     deal_candidates,
+    dedication_candidates,
     diplomacy_candidates,
     envoy_candidates,
     government_candidates,
@@ -182,6 +183,16 @@ DISPATCH_CASES.append(
         ("heal_unit", (fx.WARRIOR_IDX,)),
     )
 )
+DISPATCH_CASES.append(
+    (
+        _cand(
+            dedication_candidates(fx.dedications()),
+            ActionKind.CHOOSE_DEDICATION,
+            lambda c: c.params.name == "COMMEMORATION_SCIENTIFIC",
+        ),
+        ("choose_dedication", (0,)),
+    )
+)
 _GOV_CANDS = governor_candidates(
     fx.governors(points=1, unassigned=True), [fx.capital()]
 )
@@ -234,7 +245,6 @@ NO_DISPATCH_KINDS = {
 # Phase 2 kinds whose candidate builders and fakes land in later tasks; each
 # task removes its kinds here and adds them to DISPATCH_CASES.
 PENDING_KINDS = {
-    ActionKind.CHOOSE_DEDICATION,
     ActionKind.RECRUIT_GREAT_PERSON,
     ActionKind.PATRONIZE_GREAT_PERSON,
     ActionKind.FOUND_RELIGION,

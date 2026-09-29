@@ -529,6 +529,17 @@ class Executor:
             ):
                 return _ok()
 
+            case ActionKind.CHOOSE_DEDICATION:
+                known = self._known.dedications if self._known is not None else None
+                st = known if known is not None else await gs.get_dedications()
+                if p.name in st.active:
+                    return _no("dedication_already_active")
+                if not any(
+                    ch.index == p.index and ch.name == p.name for ch in st.choices
+                ):
+                    return _no("dedication_not_offered")
+                return _ok()
+
             case (
                 ActionKind.APPOINT_GOVERNOR
                 | ActionKind.ASSIGN_GOVERNOR
@@ -804,6 +815,19 @@ class Executor:
                 if await self._poll(cleared):
                     return confirmed("government_prompt_cleared")
                 return self._unconfirmed(raw, "government_prompt_still_blocking")
+
+            case ActionKind.CHOOSE_DEDICATION:
+                if raw.startswith(("DEDICATION_CHOSEN|", "OK:DEDICATION_CHOSEN|")):
+                    return confirmed("dedication_confirmed_from_dispatch")
+                if _game_error(raw):
+                    return self._unconfirmed(raw, "dedication_refused")
+
+                async def active():
+                    return p.name in (await gs.get_dedications()).active
+
+                if await self._poll(active):
+                    return confirmed("dedication_readback_confirmed")
+                return self._unconfirmed(raw, "dedication_not_observed")
 
             case (
                 ActionKind.APPOINT_GOVERNOR

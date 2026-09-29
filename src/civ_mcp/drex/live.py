@@ -223,6 +223,8 @@ class LiveObserver:
                 return DecisionInputs(pantheon=await gs.get_pantheon_status())
             case DecisionCategory.RESEARCH | DecisionCategory.CIVIC:
                 return DecisionInputs(progress=core.progress)
+            case DecisionCategory.DEDICATION:
+                return DecisionInputs(dedications=await gs.get_dedications())
             case DecisionCategory.GOVERNOR:
                 return DecisionInputs(governors=await gs.get_governors())
             case DecisionCategory.PROMOTION:

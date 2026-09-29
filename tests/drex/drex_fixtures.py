@@ -452,3 +452,31 @@ def governors(points: int = 0, unassigned: bool = False):
             )
         ],
     )
+
+
+def dedications(age: str = "Normal"):
+    return lq.DedicationStatus(
+        age_type=age,
+        era=1,
+        era_score=12,
+        dark_threshold=5,
+        golden_threshold=17,
+        selections_allowed=1,
+        active=[],
+        choices=[
+            lq.DedicationChoice(
+                0,
+                "COMMEMORATION_SCIENTIFIC",
+                "normal: +1 Era Score per tech boost",
+                "golden: free tech per era",
+                "dark: +2 loyalty from campuses",
+            ),
+            lq.DedicationChoice(
+                1,
+                "COMMEMORATION_MILITARY",
+                "normal: +1 Era Score per unit promoted",
+                "golden: +1 Movement for all units",
+                "dark: +3 loyalty from encampments",
+            ),
+        ],
+    )

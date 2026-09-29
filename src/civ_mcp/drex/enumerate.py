@@ -17,6 +17,7 @@ from civ_mcp.drex.candidates import (
     Candidate,
     CivicParams,
     DealParams,
+    DedicationParams,
     DiplomacyParams,
     EnvoyParams,
     Exclusion,
@@ -454,6 +455,29 @@ def governor_candidates(
                         facts={"effect": pr.description, "level": pr.level},
                     )
                 )
+    return out
+
+
+def dedication_candidates(status: lq.DedicationStatus) -> list[Candidate]:
+    """One candidate per dedication not yet active, described for the current age."""
+    out: list[Candidate] = []
+    for ch in status.choices:
+        if ch.name in status.active:
+            continue
+        if status.age_type in ("Golden", "Heroic"):
+            bonus = ch.golden_desc
+        elif status.age_type == "Dark":
+            bonus = ch.dark_desc
+        else:
+            bonus = ch.normal_desc
+        out.append(
+            Candidate.create(
+                ActionKind.CHOOSE_DEDICATION,
+                DedicationParams(ch.index, ch.name),
+                label=pretty(ch.name.replace("COMMEMORATION_", "")),
+                facts={"bonus": bonus, "age": status.age_type},
+            )
+        )
     return out
 
 
