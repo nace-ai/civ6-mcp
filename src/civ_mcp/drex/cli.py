@@ -52,6 +52,14 @@ def _err(message: str) -> None:
     print(message, file=sys.stderr)
 
 
+def _progress_line(speed: dict[str, Any]) -> None:
+    _err(
+        f"T{speed['turn']}: {speed['decisions']} decisions in {speed['seconds']}s, "
+        f"{speed['roundtrips']} round trips, Drex {speed['drex_seconds']}s, "
+        f"end turn {speed['end_turn_seconds']}s"
+    )
+
+
 def _load_config(args: argparse.Namespace) -> DrexConfig:
     cfg = DrexConfig.from_env(os.environ, env_file=Path(args.env_file))
     if getattr(args, "allow_non_drex_model", False):
@@ -162,7 +170,15 @@ async def _run_live(args: argparse.Namespace, *, dry_run: bool) -> int:
             dry_run=dry_run,
         )
         spectator = None if dry_run or args.no_spectator else LiveSpectator(conn)
-        runner = Runner(gs, selector, log, config, run_meta=meta, spectator=spectator)
+        runner = Runner(
+            gs,
+            selector,
+            log,
+            config,
+            run_meta=meta,
+            spectator=spectator,
+            on_turn=_progress_line,
+        )
         result = await runner.run()
         if dry_run and args.save_fixture and runner.preview:
             Path(args.save_fixture).write_text(json.dumps(runner.preview, indent=2))

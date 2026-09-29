@@ -19,6 +19,11 @@ class FakeConn:
 
     def __init__(self):
         self.replay_on_disconnect = True
+        self.roundtrips = 0
+        self.roundtrip_ms = 0.0
+
+    def snapshot_counters(self):
+        return self.roundtrips, self.roundtrip_ms
 
     @contextlib.contextmanager
     def replay_disabled(self):
@@ -77,6 +82,7 @@ class FakeGame:
     # ---------------------------------------------------------------- helpers
     def _record(self, method, *args):
         self.calls.append((method, args))
+        self.conn.roundtrips += 1
         self.replay_at_call.append(self.conn.replay_on_disconnect)
         fail = self.fail.pop(method, None)
         if fail and not fail[1]:
@@ -104,6 +110,7 @@ class FakeGame:
 
     async def get_game_overview(self):
         self.query_counts["get_game_overview"] += 1
+        self.conn.roundtrips += 1
         research = "None"
         if self.research:
             research = next(
@@ -127,6 +134,7 @@ class FakeGame:
 
     async def get_progress_types(self):
         self.query_counts["get_progress_types"] += 1
+        self.conn.roundtrips += 1
         return lq.ProgressTypes(self.research, self.civic)
 
     async def check_eligibility(self, kind, type_name):
@@ -140,6 +148,7 @@ class FakeGame:
 
     async def get_cities(self):
         self.query_counts["get_cities"] += 1
+        self.conn.roundtrips += 1
         return [copy.deepcopy(c) for c in self.cities.values()], []
 
     async def list_city_production(self, city_id):
@@ -150,14 +159,17 @@ class FakeGame:
 
     async def get_units(self):
         self.query_counts["get_units"] += 1
+        self.conn.roundtrips += 1
         return [copy.deepcopy(u) for u in self.units.values()]
 
     async def get_unit_action_space(self, unit_index):
         self.query_counts["get_unit_action_space"] += 1
+        self.conn.roundtrips += 1
         return copy.deepcopy(self.spaces.get(unit_index))
 
     async def get_unit_state(self, unit_index):
         self.query_counts["get_unit_state"] += 1
+        self.conn.roundtrips += 1
         u = self._by_index(unit_index)
         if u is None:
             return None
@@ -201,10 +213,12 @@ class FakeGame:
 
     async def get_diplomacy_sessions(self):
         self.query_counts["get_diplomacy_sessions"] += 1
+        self.conn.roundtrips += 1
         return copy.deepcopy(self.sessions)
 
     async def get_pending_deals(self):
         self.query_counts["get_pending_deals"] += 1
+        self.conn.roundtrips += 1
         return copy.deepcopy(self.deals)
 
     async def get_policies(self):
@@ -226,6 +240,7 @@ class FakeGame:
 
     async def get_end_turn_blockers(self):
         self.query_counts["get_end_turn_blockers"] += 1
+        self.conn.roundtrips += 1
         blockers = list(self.extra_blockers)
         if self.research is None:
             blockers.append(("ENDTURN_BLOCKING_RESEARCH", "Choose research"))

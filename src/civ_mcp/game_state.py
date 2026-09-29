@@ -130,6 +130,7 @@ class GameState:
         self.decision_only_end_turn: bool = False
         # Informational/housekeeping actions end_turn performed, for logging.
         self.end_turn_housekeeping: list[dict] = []
+        self.end_turn_phase_ms: dict[str, float] = {}
 
     async def get_game_identity(self) -> tuple[str, int]:
         """Return (civ_type_lower, random_seed) for the current game.

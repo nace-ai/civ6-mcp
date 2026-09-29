@@ -503,3 +503,44 @@ def test_no_redundant_full_read_when_nothing_was_dispatched(tmp_path):
     asyncio.run(runner.run())
     before_end = game.trace[: game.trace.index("end_turn")]
     assert before_end.count("get_units") == 1, game.trace
+
+
+# ------------------------------------------------------ timing records (C8)
+def test_decision_records_carry_observe_time_and_roundtrips(tmp_path):
+    game = FakeGame()
+    runner, _ = _runner(game, tmp_path)
+    asyncio.run(runner.run())
+    rec = next(r for r in _records(tmp_path) if r["type"] == "decision")
+    assert set(rec["timing_ms"]) >= {"api", "execute", "observe", "roundtrips"}
+    assert rec["timing_ms"]["roundtrips"] >= 1
+    turn = next(r for r in _records(tmp_path) if r["type"] == "turn")
+    assert "roundtrips" in turn and "phase_ms" in turn
+
+
+def test_speed_record_written_per_advanced_turn_and_on_turn_called(tmp_path):
+    game = FakeGame()
+    seen = []
+    log = DecisionLog(tmp_path / "run.jsonl", run_id="drex-test", secrets=[])
+    runner = Runner(
+        game,
+        PreferSelector(),
+        log,
+        RunConfig(turns=1),
+        end_turn=_fake_end_turn(game),
+        on_turn=seen.append,
+    )
+    asyncio.run(runner.run())
+    speed = [r for r in _records(tmp_path) if r["type"] == "speed"]
+    assert len(speed) == 1 and len(seen) == 1
+    assert seen[0]["turn"] == speed[0]["turn"] == 5
+    assert {
+        "turn",
+        "decisions",
+        "seconds",
+        "roundtrips",
+        "drex_seconds",
+        "end_turn_seconds",
+    } <= set(speed[0])
+    assert speed[0]["decisions"] == sum(
+        1 for r in _records(tmp_path) if r["type"] == "decision"
+    )

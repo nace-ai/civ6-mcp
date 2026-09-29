@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -45,6 +46,15 @@ def _is_consequential(blocking_type: str) -> bool:
         "WORLD_CONGRESS" in blocking_type
         and blocking_type != "ENDTURN_BLOCKING_WORLD_CONGRESS_LOOK"
     )
+
+
+def _stamp(gs: GameState, name: str, t0: float) -> float:
+    """Record how long a phase of the end turn took (ms) and return a new t0."""
+    now = time.perf_counter()
+    phases = getattr(gs, "end_turn_phase_ms", None)
+    if phases is not None:
+        phases[name] = round(phases.get(name, 0.0) + (now - t0) * 1000.0, 1)
+    return now
 
 
 def _housekeeping(gs: GameState, action: str, detail: str = "") -> None:
@@ -108,7 +118,9 @@ async def _check_mid_turn_diplomacy(
                 _housekeeping(gs, "war_declaration_dismissed", ws.other_civ_name)
             # Remove the dismissed sessions from the list
             dismissed = {s.other_player_id for s in war_sessions}
-            mid_sessions = [s for s in mid_sessions if s.other_player_id not in dismissed]
+            mid_sessions = [
+                s for s in mid_sessions if s.other_player_id not in dismissed
+            ]
             # If only war sessions, resume polling (original ACTION_ENDTURN
             # is still in flight — do NOT re-send or turns will skip)
             if not mid_sessions:
@@ -542,6 +554,7 @@ def _check_save_scumming(gs: GameState) -> tuple[list[lq.TurnEvent], bool]:
 
 async def execute_end_turn(gs: GameState) -> str:
     """End the turn with snapshot-diff event detection."""
+    _t = time.perf_counter()
     # 0a. Run aborted due to save scumming — refuse to advance
     if gs._run_aborted:
         return (
@@ -598,12 +611,14 @@ async def execute_end_turn(gs: GameState) -> str:
 
     # 2. Pre-dismiss any ExclusivePopupManager popups (wonder, disaster, era)
     # that may hold engine locks blocking turn advancement.
+    _t = _stamp(gs, "pre_checks", _t)
     try:
         pre_dismiss = await gs.dismiss_popup()
         if "Dismissed" in pre_dismiss:
             _housekeeping(gs, "popup_dismissed_pre_turn", pre_dismiss)
     except Exception:
         log.debug("Pre-turn dismiss failed", exc_info=True)
+    _t = _stamp(gs, "pre_dismiss", _t)
 
     # 2b. World Congress gate — if WC fires this turn and no handler is
     #     registered, block end_turn and tell the agent to vote first.
@@ -1214,9 +1229,11 @@ async def execute_end_turn(gs: GameState) -> str:
         if gs._pending_end_turn_from is not None:
             turn_before = gs._pending_end_turn_from
     else:
+        _t = _stamp(gs, "pre_checks", _t)
         await gs.conn.execute_write(lua)
         gs._pending_end_turn = True
         gs._pending_end_turn_from = turn_before
+    _t = _stamp(gs, "request", _t)
 
     # Poll for turn advancement using GameCore-only queries.
     # CRITICAL: Do NOT send InGame queries while AI civs are processing
@@ -1367,7 +1384,7 @@ async def execute_end_turn(gs: GameState) -> str:
                 if not _decision_only(gs):
                     await gs.conn.execute_write(lua)
                 for _ in range(5):
-                    await asyncio.sleep(2.0)
+                    await asyncio.sleep(0.5)
                     turn_after = await _get_turn_number(gs)
                     if (
                         turn_after is not None
@@ -1381,7 +1398,7 @@ async def execute_end_turn(gs: GameState) -> str:
 
     if not advanced:
         # Final verification — turn may have slipped through
-        await asyncio.sleep(2.0)
+        await asyncio.sleep(0.5)
         turn_after = await _get_turn_number(gs)
         if (
             turn_after is not None
@@ -1390,6 +1407,7 @@ async def execute_end_turn(gs: GameState) -> str:
         ):
             advanced = True
 
+    _t = _stamp(gs, "poll", _t)
     if not advanced:
         # Check if game ended during turn transition (victory/defeat)
         gameover = await gs.check_game_over()
@@ -1614,15 +1632,18 @@ async def execute_end_turn(gs: GameState) -> str:
 
     events.sort(key=lambda e: e.priority)
 
-    # Victory proximity check (every turn — lightweight)
-    try:
-        victory_events = await _check_victory_proximity(gs)
-        events.extend(victory_events)
-    except Exception:
-        log.warning("Victory proximity check failed", exc_info=True)
+    # Victory proximity check (every turn — lightweight). Narration only:
+    # decision-only mode does not read the report, so it skips the reads.
+    narrate = not _decision_only(gs)
+    if narrate:
+        try:
+            victory_events = await _check_victory_proximity(gs)
+            events.extend(victory_events)
+        except Exception:
+            log.warning("Victory proximity check failed", exc_info=True)
 
     # Every 10 turns: full victory progress snapshot
-    if turn_after is not None and turn_after % 10 == 0:
+    if narrate and turn_after is not None and turn_after % 10 == 0:
         try:
             vp = await gs.get_victory_progress()
             summary = nr.narrate_victory_progress(vp)
@@ -1666,11 +1687,12 @@ async def execute_end_turn(gs: GameState) -> str:
 
     # Empire-wide warnings (scoreboard, idle trade, loyalty, military, gold)
     game_score = None
-    try:
-        warning_events, game_score = await _check_empire_warnings(gs, snap_after)
-        events.extend(warning_events)
-    except Exception:
-        log.debug("Empire warnings failed", exc_info=True)
+    if narrate:
+        try:
+            warning_events, game_score = await _check_empire_warnings(gs, snap_after)
+            events.extend(warning_events)
+        except Exception:
+            log.debug("Empire warnings failed", exc_info=True)
 
     # Save scumming detection
     try:
@@ -1682,6 +1704,7 @@ async def execute_end_turn(gs: GameState) -> str:
         log.debug("Save scumming check failed", exc_info=True)
 
     events.sort(key=lambda e: e.priority)
+    _stamp(gs, "post", _t)
     return gs._build_turn_report(
         turn_before,
         turn_after,
@@ -1714,6 +1737,7 @@ class EndTurnOutcome:
     game_over: lq.GameOverStatus | None = None
     housekeeping: list[dict] = field(default_factory=list)
     report: str = ""
+    phase_ms: dict[str, float] = field(default_factory=dict)
 
 
 async def execute_end_turn_typed(
@@ -1723,6 +1747,7 @@ async def execute_end_turn_typed(
     previous_mode = _decision_only(gs)
     gs.decision_only_end_turn = decision_only
     gs.end_turn_housekeeping = []
+    gs.end_turn_phase_ms = {}
     if gs._pending_end_turn and gs._pending_end_turn_from is not None:
         turn_before = gs._pending_end_turn_from
     else:
@@ -1739,6 +1764,7 @@ async def execute_end_turn_typed(
         housekeeping=housekeeping,
         report=report,
         end_turn_in_flight=gs._pending_end_turn,
+        phase_ms=dict(getattr(gs, "end_turn_phase_ms", {}) or {}),
     )
     if gs._run_aborted:
         return EndTurnOutcome(status="aborted", **base)
@@ -1771,7 +1797,9 @@ async def execute_end_turn_typed(
     except Exception:
         log.debug("Typed outcome: congress query failed", exc_info=True)
     blocked = bool(sessions or deals or blockers or wc_pending)
-    war_declared = any(h.get("action") == "war_declaration_dismissed" for h in housekeeping)
+    war_declared = any(
+        h.get("action") == "war_declaration_dismissed" for h in housekeeping
+    )
     if blocked:
         status = "blocked"
     elif war_declared:

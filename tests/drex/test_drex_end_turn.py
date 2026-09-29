@@ -270,3 +270,52 @@ def test_legacy_mid_turn_probe_still_dismisses_at_war_sessions(monkeypatch):
     game = _ProbeGame(decision_only=False)
     asyncio.run(_check_mid_turn_diplomacy(game, END_TURN, 12))
     assert game.conn.ran("CloseSession")
+
+
+# ------------------------------------------------- phase timing, trims (C7)
+def test_typed_outcome_reports_phase_timings():
+    conn = ScriptedConn([], advance_on_end_turn=True)
+    outcome = asyncio.run(execute_end_turn_typed(_gs(conn, decision_only=True)))
+    assert outcome.status == "advanced"
+    assert {"pre_checks", "pre_dismiss", "request", "poll", "post"} <= set(
+        outcome.phase_ms
+    )
+    assert all(v >= 0.0 for v in outcome.phase_ms.values())
+
+
+def _record(name, sink):
+    async def fake(*args, **kwargs):
+        sink.append(name)
+        return ([], 0) if name == "warnings" else []
+
+    return fake
+
+
+def test_decision_only_mode_skips_narration_only_checks(monkeypatch):
+    from civ_mcp import end_turn as end_turn_mod
+
+    called = []
+    monkeypatch.setattr(
+        end_turn_mod, "_check_victory_proximity", _record("victory", called)
+    )
+    monkeypatch.setattr(
+        end_turn_mod, "_check_empire_warnings", _record("warnings", called)
+    )
+    conn = ScriptedConn([], advance_on_end_turn=True)
+    asyncio.run(execute_end_turn_typed(_gs(conn, decision_only=True)))
+    assert called == []
+
+
+def test_legacy_mode_keeps_narration_checks(monkeypatch):
+    from civ_mcp import end_turn as end_turn_mod
+
+    called = []
+    monkeypatch.setattr(
+        end_turn_mod, "_check_victory_proximity", _record("victory", called)
+    )
+    monkeypatch.setattr(
+        end_turn_mod, "_check_empire_warnings", _record("warnings", called)
+    )
+    conn = ScriptedConn([], advance_on_end_turn=True)
+    asyncio.run(execute_end_turn(_gs(conn, decision_only=False)))
+    assert "victory" in called and "warnings" in called

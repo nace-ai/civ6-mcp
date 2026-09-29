@@ -107,7 +107,7 @@ class CameraController:
     the next hop. Pauses automatically during active diplomacy screens.
     """
 
-    def __init__(self, conn: "GameConnection", *, check_diplomacy: bool = True) -> None:
+    def __init__(self, conn: GameConnection, *, check_diplomacy: bool = True) -> None:
         self._conn = conn
         self._queue: asyncio.Queue[CameraEvent] = asyncio.Queue(
             maxsize=CAMERA_QUEUE_MAX
@@ -204,7 +204,7 @@ class PopupWatcher:
     while diplomacy screens are active (CRITICAL status).
     """
 
-    def __init__(self, conn: "GameConnection", *, poll: bool = True) -> None:
+    def __init__(self, conn: GameConnection, *, poll: bool = True) -> None:
         self._conn = conn
         self._task: asyncio.Task | None = None
         # poll=False: the owner already reads the popup state in its own

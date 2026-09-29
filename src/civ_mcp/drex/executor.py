@@ -70,6 +70,7 @@ class ActionOutcome:
     reconciled: bool = False
     dispatch_error: str | None = None
     elapsed_ms: float = 0.0
+    roundtrips: int = 0
 
     def to_record(self) -> dict[str, Any]:
         rec = dataclasses.asdict(self)
@@ -209,11 +210,15 @@ class Executor:
             if inputs is not None and point.observation_version == current_version
             else None
         )
+        counters = getattr(getattr(self.gs, "conn", None), "snapshot_counters", None)
+        rt0 = counters()[0] if counters else 0
         try:
             outcome = await self._execute(candidate, point, current_version, turn)
         finally:
             self._known = None
         outcome.elapsed_ms = round((time.perf_counter() - started) * 1000.0, 1)
+        if counters:
+            outcome.roundtrips = counters()[0] - rt0
         return outcome
 
     async def _execute(

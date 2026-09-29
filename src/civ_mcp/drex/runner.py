@@ -87,6 +87,7 @@ class Runner:
         executor: Executor | None = None,
         run_meta: dict[str, Any] | None = None,
         spectator: Spectator | None = None,
+        on_turn: Callable[[dict[str, Any]], None] | None = None,
     ):
         if selector is None and not config.dry_run:
             raise ValueError("a selector is required unless dry_run is set")
@@ -120,6 +121,9 @@ class Runner:
         self._game_ms = 0.0
         self._t0 = time.perf_counter()
         self._last_core: CoreObservation | None = None
+        self._on_turn = on_turn
+        self._last_observe = {"ms": 0.0, "roundtrips": 0}
+        self._turn_stats = {"decisions": 0, "api_ms": 0.0, "roundtrips": 0, "t0": 0.0}
 
     async def _observe(
         self,
@@ -128,20 +132,32 @@ class Runner:
         refresh: tuple[frozenset[str], CoreObservation] | None = None,
     ) -> CoreObservation:
         t0 = time.perf_counter()
+        rt0 = self._roundtrips()
         if reactive_from is not None:
             core = await self.observer.reactive(reactive_from)
         elif refresh is not None:
             core = await self.observer.refresh(refresh[1], refresh[0])
         else:
             core = await self.observer.core()
-        self._game_ms += (time.perf_counter() - t0) * 1000.0
+        ms = (time.perf_counter() - t0) * 1000.0
+        self._game_ms += ms
+        self._last_observe = {
+            "ms": round(ms, 1),
+            "roundtrips": self._roundtrips() - rt0,
+        }
+        self._turn_stats["roundtrips"] += self._last_observe["roundtrips"]
         self._last_core = core
         if self.spectator is not None:
             self.spectator.popup_status(core.popup_state)
         return core
 
+    def _roundtrips(self) -> int:
+        counters = getattr(getattr(self.gs, "conn", None), "snapshot_counters", None)
+        return counters()[0] if counters else 0
+
     async def run(self) -> RunResult:
         self._t0 = time.perf_counter()
+        self._turn_stats["t0"] = self._t0
         if self.spectator is not None:
             self.spectator.start()
         try:
@@ -289,6 +305,7 @@ class Runner:
                     blocked = None
                     if self.spectator is not None:
                         self.spectator.turn_advanced()
+                    self._write_speed(outcome, elapsed)
                     self.memory.record(
                         Fact(
                             outcome.turn_before or core.turn,
@@ -390,6 +407,7 @@ class Runner:
                 return await self._stop(f"selector_paused:{e}", core, checkpoint=True)
             api_ms = sum(a.get("latency_ms") or 0.0 for a in result.attempts)
             self._api_ms += api_ms
+            observe = dict(self._last_observe)
             candidate = point.get(result.decision.candidate_id)
             call = dispatch_call(candidate)
 
@@ -417,6 +435,9 @@ class Runner:
             )
             self._game_ms += outcome.elapsed_ms
             self._decisions += 1
+            self._turn_stats["decisions"] += 1
+            self._turn_stats["api_ms"] += api_ms
+            self._turn_stats["roundtrips"] += outcome.roundtrips
             blocked = None
             if outcome.dispatched:
                 self._follow(candidate, core)
@@ -445,6 +466,8 @@ class Runner:
                     "timing_ms": {
                         "api": round(api_ms, 1),
                         "execute": outcome.elapsed_ms,
+                        "observe": observe["ms"],
+                        "roundtrips": observe["roundtrips"] + outcome.roundtrips,
                     },
                 },
             )
@@ -460,11 +483,30 @@ class Runner:
                     refresh=(frozenset({"blockers", "popup"}), core)
                 )
 
+    def _write_speed(self, outcome: EndTurnOutcome, end_turn_ms: float) -> None:
+        now = time.perf_counter()
+        st = self._turn_stats
+        speed = {
+            "turn": outcome.turn_before,
+            "decisions": st["decisions"],
+            "seconds": round(now - st["t0"], 2),
+            "roundtrips": st["roundtrips"],
+            "drex_seconds": round(st["api_ms"] / 1000.0, 2),
+            "end_turn_seconds": round(end_turn_ms / 1000.0, 2),
+            "phase_ms": dict(outcome.phase_ms),
+        }
+        self.log.write("speed", speed)
+        if self._on_turn is not None:
+            self._on_turn(speed)
+        self._turn_stats = {"decisions": 0, "api_ms": 0.0, "roundtrips": 0, "t0": now}
+
     def _log_turn(self, outcome: EndTurnOutcome, elapsed_ms: float) -> None:
         self.log.write(
             "turn",
             {
                 "status": outcome.status,
+                "roundtrips": self._turn_stats["roundtrips"],
+                "phase_ms": dict(outcome.phase_ms),
                 "turn_before": outcome.turn_before,
                 "turn_after": outcome.turn_after,
                 "blockers": [list(b) for b in outcome.blockers],
