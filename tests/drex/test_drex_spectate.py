@@ -369,3 +369,50 @@ def test_no_popup_feed_or_dismissal_while_end_turn_is_in_flight(tmp_path):
     assert "popup" not in kinds[i:j] and "focus" not in kinds[i:j]
     assert kinds.count("quiet_on") >= 1
     assert game.turn == 6
+
+
+# ------------------------------------------------------- camera pacing (Task 0)
+def test_hex_distance_on_offset_rows():
+    from civ_mcp.drex.spectate import hex_distance
+
+    assert hex_distance(10, 10, 10, 10) == 0
+    assert hex_distance(10, 10, 11, 10) == 1
+    assert hex_distance(10, 10, 10, 12) == 2
+    assert hex_distance(0, 0, 5, 0) == 5
+    assert hex_distance(10, 10, 15, 14) >= 5
+
+
+def test_pacer_skips_nearby_hops_soon_after_the_last_one():
+    from civ_mcp.drex.spectate import CameraPacer
+
+    p = CameraPacer(min_tiles=4, min_seconds=3.0)
+    assert p.should_hop(10, 10, now=0.0) is True  # first hop always
+    assert p.should_hop(11, 10, now=0.5) is False  # one tile, right away
+    assert p.should_hop(12, 11, now=1.0) is False  # still within 4 tiles
+    assert p.should_hop(20, 10, now=1.5) is True  # far away: pan
+    assert p.should_hop(21, 10, now=5.0) is True  # near, but 3 s passed
+
+
+def test_live_spectator_focus_is_paced_and_keeps_only_the_latest_hop():
+    class Conn:
+        def __init__(self):
+            self.lua = []
+
+        async def execute_write(self, lua, timeout=5.0):
+            self.lua.append(lua)
+            return ["---END---"]
+
+    async def scenario():
+        conn = Conn()
+        s = LiveSpectator(Conn())
+        s.camera._conn = conn
+        # not started: pushes accumulate in the queue
+        s.focus(10, 10)
+        s.focus(11, 10)  # suppressed: adjacent, immediately after
+        s.focus(30, 10)
+        s.focus(31, 10)  # suppressed
+        s.focus(50, 10)
+        assert s.camera._queue.qsize() == 1  # only the latest far hop is kept
+        assert s.camera._queue.get_nowait().x == 50
+
+    asyncio.run(scenario())

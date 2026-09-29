@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from typing import TYPE_CHECKING, Protocol
 
 from civ_mcp.drex.candidates import (
@@ -44,6 +45,43 @@ class Spectator(Protocol):
     def quiet(self, on: bool) -> None: ...
 
 
+def hex_distance(x1: int, y1: int, x2: int, y2: int) -> int:
+    """Tile distance on Civ 6's offset hex grid (odd rows shifted right)."""
+
+    def cube(x: int, y: int) -> tuple[int, int]:
+        q = x - (y - (y & 1)) // 2
+        return q, y
+
+    q1, r1 = cube(x1, y1)
+    q2, r2 = cube(x2, y2)
+    dq, dr = q1 - q2, r1 - r2
+    return (abs(dq) + abs(dr) + abs(dq + dr)) // 2
+
+
+class CameraPacer:
+    """Pan like a person watching: only when the action leaves the view
+    (more than ``min_tiles`` from the last focus) or after ``min_seconds`` of
+    looking at the same area. Every dispatched action is a candidate hop, so
+    without this the camera re-centres on each one-tile move and skip."""
+
+    def __init__(self, *, min_tiles: int = 4, min_seconds: float = 3.0) -> None:
+        self.min_tiles = min_tiles
+        self.min_seconds = min_seconds
+        self._last: tuple[int, int, float] | None = None
+
+    def should_hop(self, x: int, y: int, *, now: float | None = None) -> bool:
+        if now is None:
+            now = time.monotonic()
+        if self._last is None:
+            self._last = (x, y, now)
+            return True
+        lx, ly, lt = self._last
+        if hex_distance(x, y, lx, ly) > self.min_tiles or now - lt >= self.min_seconds:
+            self._last = (x, y, now)
+            return True
+        return False
+
+
 class LiveSpectator:
     """Popup auto-dismiss plus camera follow on a live tuner connection.
 
@@ -52,8 +90,11 @@ class LiveSpectator:
     """
 
     def __init__(self, conn: GameConnection) -> None:
-        self.camera = CameraController(conn, check_diplomacy=False)
+        # One pending hop at most: when the loop runs faster than the dwell,
+        # the camera jumps to the latest action instead of replaying old ones.
+        self.camera = CameraController(conn, check_diplomacy=False, queue_max=1)
         self.popups = PopupWatcher(conn, poll=False)
+        self.pacer = CameraPacer()
         self._quiet = False
         self._pending: asyncio.Task | None = None
 
@@ -86,7 +127,8 @@ class LiveSpectator:
             self._pending = None
 
     def focus(self, x: int, y: int, label: str = "") -> None:
-        self.camera.push(x, y, label)
+        if self.pacer.should_hop(x, y):
+            self.camera.push(x, y, label)
 
     def turn_advanced(self) -> None:
         # Pending hops belong to the finished turn; the next turn's actions

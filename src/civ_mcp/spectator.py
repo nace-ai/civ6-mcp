@@ -107,11 +107,15 @@ class CameraController:
     the next hop. Pauses automatically during active diplomacy screens.
     """
 
-    def __init__(self, conn: GameConnection, *, check_diplomacy: bool = True) -> None:
+    def __init__(
+        self,
+        conn: GameConnection,
+        *,
+        check_diplomacy: bool = True,
+        queue_max: int = CAMERA_QUEUE_MAX,
+    ) -> None:
         self._conn = conn
-        self._queue: asyncio.Queue[CameraEvent] = asyncio.Queue(
-            maxsize=CAMERA_QUEUE_MAX
-        )
+        self._queue: asyncio.Queue[CameraEvent] = asyncio.Queue(maxsize=queue_max)
         self._task: asyncio.Task | None = None
         # With check_diplomacy=False the owner reports screen state through
         # set_critical() instead of the controller spending a round trip per hop.
