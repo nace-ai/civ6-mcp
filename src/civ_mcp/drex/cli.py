@@ -13,6 +13,7 @@ import os
 import platform
 import sys
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -38,7 +39,7 @@ from civ_mcp.drex.observation import (
 from civ_mcp.drex.points import build_decision_point
 from civ_mcp.drex.runner import DEFAULT_OBJECTIVE, RunConfig, Runner
 from civ_mcp.drex.selectors import DrexSelector, RandomSelector, build_request
-from civ_mcp.drex.serialize import from_jsonable
+from civ_mcp.drex.serialize import from_jsonable, to_jsonable
 from civ_mcp.drex.spectate import LiveSpectator
 
 SUCCESS_STOPS = frozenset({"turn_budget_reached", "game_over", "dry_run_complete"})
@@ -306,6 +307,35 @@ def _fullscreen_warning(path: Path = _APP_OPTIONS) -> str | None:
     return None
 
 
+async def _probe_city_attack(gs: Any) -> list[dict[str, Any]]:
+    cities, _ = await gs.get_cities()
+    out = []
+    for city in cities:
+        targets = await gs.get_city_attack_targets(city.city_id)
+        out.append({"city": city.name, "city_id": city.city_id, "targets": targets})
+    return out
+
+
+# One read-only query per Phase 2 decision kind, for `civ-drex probe --kind`.
+PROBE_KINDS: dict[str, Callable[[Any], Awaitable[Any]]] = {
+    "promotion": lambda gs: gs.get_promotable_units(),
+    "governor": lambda gs: gs.get_governors(),
+    "dedication": lambda gs: gs.get_dedications(),
+    "great_person": lambda gs: gs.get_great_people(),
+    "religion": lambda gs: gs.get_religion_founding_status(),
+    "city_attack": _probe_city_attack,
+    "blockers": lambda gs: gs.get_end_turn_blocking_types(),
+}
+
+
+async def _probe_kind(kind: str, gs: Any) -> dict[str, Any]:
+    """Run exactly one new query read-only and return it JSON-able."""
+    if kind not in PROBE_KINDS:
+        raise ValueError(f"unknown probe kind {kind!r}; one of {sorted(PROBE_KINDS)}")
+    result = await PROBE_KINDS[kind](gs)
+    return {"kind": kind, "result": to_jsonable(result)}
+
+
 async def _probe(args: argparse.Namespace) -> int:
     """Read-only live checks of the queries the controller relies on."""
     from civ_mcp.connection import GameConnection
@@ -318,6 +348,9 @@ async def _probe(args: argparse.Namespace) -> int:
     try:
         await conn.connect()
         gs = GameState(conn)
+        if getattr(args, "kind", None):
+            _print(await _probe_kind(args.kind, gs))
+            return 0
         civ, seed = await gs.get_game_identity()
         overview = await gs.get_game_overview()
         progress = await gs.get_progress_types()
@@ -433,6 +466,12 @@ def _parser() -> argparse.ArgumentParser:
 
     pr = sub.add_parser("probe", help="read-only live check of controller queries")
     game(pr)
+    pr.add_argument(
+        "--kind",
+        choices=sorted(PROBE_KINDS),
+        default=None,
+        help="run only this Phase 2 query read-only and print the parsed result",
+    )
     return p
 
 

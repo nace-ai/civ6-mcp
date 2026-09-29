@@ -162,3 +162,61 @@ def test_keyboard_interrupt_exits_130(monkeypatch):
 
     monkeypatch.setattr(cli.asyncio, "run", boom)
     assert cli.main(["play"]) == 130
+
+
+# ------------------------------------------------------- probe --kind (Phase 2)
+def test_probe_kind_runs_one_read_only_query_and_returns_json():
+    import asyncio
+    import json
+
+    import drex_fixtures as fx
+
+    from civ_mcp.drex.cli import PROBE_KINDS, _probe_kind
+
+    class GS:
+        def __init__(self):
+            self.calls = []
+
+        async def get_dedications(self):
+            self.calls.append("get_dedications")
+            return fx.dedications()
+
+        async def get_great_people(self):
+            self.calls.append("get_great_people")
+            return fx.great_people()
+
+    gs = GS()
+    out = asyncio.run(_probe_kind("dedication", gs))
+    assert gs.calls == ["get_dedications"]
+    json.dumps(out)  # JSON-able
+    assert out["kind"] == "dedication" and out["result"]["age_type"] == "Normal"
+    out = asyncio.run(_probe_kind("great_person", gs))
+    assert out["result"][0]["individual_name"] == "Hypatia"
+    assert set(PROBE_KINDS) >= {
+        "promotion",
+        "governor",
+        "dedication",
+        "great_person",
+        "religion",
+        "city_attack",
+        "blockers",
+    }
+
+
+def test_probe_kind_rejects_unknown_kind():
+    import asyncio
+
+    import pytest
+
+    from civ_mcp.drex.cli import _probe_kind
+
+    with pytest.raises(ValueError):
+        asyncio.run(_probe_kind("nope", object()))
+
+
+def test_probe_parser_accepts_kind():
+    from civ_mcp.drex.cli import _parser
+
+    args = _parser().parse_args(["probe", "--kind", "religion"])
+    assert args.kind == "religion"
+    assert _parser().parse_args(["probe"]).kind is None
