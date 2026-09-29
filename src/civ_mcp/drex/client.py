@@ -5,11 +5,12 @@ wire-compatible TypeSafe API reference, https://docs.typesafe.ai/api.md):
 
 - Base URL ``https://drex.nace.ai``; ``Authorization: Bearer <key>``.
 - Request: ``{"model", "state", "questions": {id: {"type": "choice",
-  "instructions", "criteria": {option: description|null}}}}``.
+  "instructions", "criteria": {option: string|null}}}}``. Drex rejects
+  object descriptions with 422 (TypeSafe accepts them).
 - Response: ``{"model", "answers": {id: {"type": "choice", "choice",
   "probabilities": {option: p}, "confidence"}}, "usage": {...}}``.
 - 401 bad key, 422 invalid body, 429 rate limited, 529 overloaded.
-- At most 255 options per Choice (TypeSafe limit; not yet confirmed for Drex).
+- At most 255 options per Choice (confirmed on Drex: 256 returns 422).
 
 Each call is a single attempt; callers own the retry budget so that
 transport and answer-validation failures share one bound.

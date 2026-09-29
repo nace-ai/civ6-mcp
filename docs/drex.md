@@ -16,7 +16,7 @@ observe (typed) -> scheduler picks one entity -> enumerate candidates -> Drex ch
 | C — 20 consecutive turns | Not run, same reasons. The runner, logging and stop/checkpoint paths are implemented and tested against an in-memory game. |
 | D — broader coverage, random baseline comparison | Not started beyond the labeled `random-baseline` selector. |
 
-**Key issue:** the supplied key has the `apikey_` prefix. `https://drex.nace.ai` rejects it (`401: Invalid API key. Pass a nace_sk_ key`). The same key is valid on TypeSafe's `https://api.typesafe.ai`, whose account lists only `jev-latest`/`jev-preview`, and returns `Unknown model: drex-latest`. A Drex key is created at https://drex.nace.ai.
+A Drex key (`nace_sk_...`, created at https://drex.nace.ai) is required; `apikey_` keys belong to TypeSafe and are rejected by drex.nace.ai with 401.
 
 ## Verified API contract
 
@@ -26,13 +26,13 @@ Sources: [nace.ai/drex.md](https://nace.ai/drex.md) (states the API is wire-comp
 |---|---|---|
 | Endpoint | `POST https://drex.nace.ai/v1/systemone`, `GET /v1/models` | Nace docs; live 401 from drex.nace.ai |
 | Auth | `Authorization: Bearer <nace_sk_...>` | Nace docs; live 401 message |
-| Model | `drex-latest` | Nace docs (not yet reachable) |
-| Request | `{"model","state","questions":{"decision":{"type":"choice","instructions","criteria":{label: description\|null}}}}` | Docs; live against TypeSafe |
+| Model | `drex-latest` → `drex-v1.1` (also `drex-v1.0`) | Live `GET /v1/models` and responses, 2026-09-29 |
+| Request | `{"model","state","questions":{"decision":{"type":"choice","instructions","criteria":{label: string\|null}}}}` | Live: Drex returns 422 for object descriptions (`must be a string or null`), unlike TypeSafe, so facts are sent as one `key: value; ...` line |
 | Response | `answers.decision = {"type":"choice","choice","probabilities":{label:p},"confidence"}`, `usage.{input_tokens,output_tokens}`, header `x-typesafe-request-id` | Docs; live against TypeSafe (`jev-1.13.0`, 300 input tokens, 312 ms) |
 | Errors | 401 key, 422 body, 429 rate limit, 529 overloaded | Docs; 401 observed live |
-| Limits | ≤255 options per Choice; Jev: 64k tokens/request, 32k for state + longest question | TypeSafe docs only — **not confirmed for Drex** |
+| Limits | ≤255 options per Choice; context limits unknown (Jev: 64k tokens/request) | Live on Drex: 255 accepted, 256 rejected (422); context limit not probed |
 
-The one live request against TypeSafe used Jev, not Drex, and only checked the client plumbing. `civ-drex` refuses any response whose `model` does not start with `drex` unless `--allow-non-drex-model` is passed explicitly.
+Live Drex checks (2026-09-29): the 2-option probe and four realistic fixture decisions (research, production, warrior, settler) all returned valid distributions from `drex-v1.1` in 300–700 ms with 22–552 input tokens. An earlier request against TypeSafe used Jev, not Drex, and only checked the client plumbing. `civ-drex` refuses any response whose `model` does not start with `drex` unless `--allow-non-drex-model` is passed explicitly.
 
 **Selection rule.** Take the options with maximum probability (within 1e-9). If the service's reported `choice` is one of them, select it; if it reported a choice that is not a maximum, reject the answer. With no reported choice, the lowest candidate id wins. Answers are rejected if any option is unknown, missing or duplicated (duplicate JSON keys included), if a probability is non-numeric, outside [0, 1] or non-finite (JSON `NaN`/`Infinity` are refused at the wire), or if they do not sum to 1 within 0.01 + 0.0005 per option. Scores are option probabilities, not win probabilities.
 

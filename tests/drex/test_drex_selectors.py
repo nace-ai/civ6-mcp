@@ -80,7 +80,28 @@ def test_request_sends_labels_as_options_and_context_as_state():
     call = client.calls[0]
     assert call["state"] == {"turn": 3, "objective": "expand"}
     assert call["instructions"] == "Which technology should the empire research next?"
-    assert call["options"] == {"Mining": None, "Pottery": {"turns": 4}}
+    assert call["options"] == {"Mining": None, "Pottery": "turns: 4"}
+
+
+def test_option_descriptions_are_flat_deterministic_text():
+    from civ_mcp.drex.selectors import describe_facts
+
+    facts = {
+        "terrain": "Grass",
+        "feature": None,
+        "hills": True,
+        "river": False,
+        "slots": ["Military", "Economic"],
+        "yields": {"food": 2, "production": 1},
+        "unlocks": "",
+        "distance": 2,
+    }
+    assert describe_facts(facts) == (
+        "terrain: Grass; hills: yes; river: no; slots: Military, Economic; "
+        "yields: food 2, production 1; distance: 2"
+    )
+    assert describe_facts({}) is None
+    assert describe_facts({"feature": None}) is None
 
 
 def test_valid_answer_yields_decision_on_stored_candidate():

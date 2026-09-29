@@ -56,11 +56,32 @@ class ChoiceClient(Protocol):
     ) -> ChoiceAnswer: ...
 
 
+def _fact_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    if isinstance(value, (list, tuple)):
+        return ", ".join(_fact_value(v) for v in value)
+    if isinstance(value, dict):
+        return ", ".join(f"{k} {_fact_value(v)}" for k, v in value.items())
+    return str(value)
+
+
+def describe_facts(facts: Mapping[str, Any]) -> str | None:
+    """Drex accepts only a string or null per option, so facts become one
+    ``key: value; ...`` line in their stored order; empty values are omitted."""
+    parts = [
+        f"{k}: {_fact_value(v)}"
+        for k, v in facts.items()
+        if v is not None and v != "" and v != [] and v != {}
+    ]
+    return "; ".join(parts) or None
+
+
 def build_request(point: DecisionPoint) -> dict[str, Any]:
     return {
         "state": dict(point.context),
         "instructions": point.question,
-        "options": {c.label: (dict(c.facts) or None) for c in point.candidates},
+        "options": {c.label: describe_facts(c.facts) for c in point.candidates},
     }
 
 
