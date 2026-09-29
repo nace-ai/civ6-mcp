@@ -25,6 +25,9 @@ class FakeConn:
     def snapshot_counters(self):
         return self.roundtrips, self.roundtrip_ms
 
+    async def reconnect(self):
+        self.reconnects = getattr(self, "reconnects", 0) + 1
+
     @contextlib.contextmanager
     def replay_disabled(self):
         previous = self.replay_on_disconnect
@@ -89,6 +92,11 @@ class FakeGame:
             raise fail[0]
         return fail
 
+    def _maybe_fail(self, method):
+        fail = self.fail.pop(method, None)
+        if fail:
+            raise fail[0]
+
     def _after(self, fail):
         if fail and fail[1]:
             raise fail[0]
@@ -147,6 +155,7 @@ class FakeGame:
         return (type_name in types, "engine")
 
     async def get_cities(self):
+        self._maybe_fail("get_cities")
         self.query_counts["get_cities"] += 1
         self.conn.roundtrips += 1
         return [copy.deepcopy(c) for c in self.cities.values()], []
@@ -158,6 +167,7 @@ class FakeGame:
         return set(fx.WONDERS)
 
     async def get_units(self):
+        self._maybe_fail("get_units")
         self.query_counts["get_units"] += 1
         self.conn.roundtrips += 1
         return [copy.deepcopy(u) for u in self.units.values()]

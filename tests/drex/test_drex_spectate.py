@@ -151,8 +151,14 @@ def test_runner_stops_spectator_when_loop_raises(tmp_path):
         end_turn=boom,
         spectator=spec,
     )
+
+    async def no_sleep(_):
+        return None
+
+    runner._sleep = no_sleep
+    runner.max_loop_iterations = 4
     result = asyncio.run(runner.run())
-    assert result.stop_reason.startswith("error:RuntimeError")
+    assert result.stop_reason == "interrupted"  # bounded by the test only
     assert spec.events[-1] == ("stop",)
 
 

@@ -140,3 +140,14 @@ def test_unexpected_error_returns_exit_code_3(tmp_path, capsys, monkeypatch):
     code = main(["play", "--selector", "random-baseline", "--log-dir", str(tmp_path)])
     assert code == 3
     assert "RuntimeError" in capsys.readouterr().err
+
+
+def test_fullscreen_warning_only_for_exclusive_fullscreen(tmp_path):
+    from civ_mcp.drex.cli import _fullscreen_warning
+
+    f = tmp_path / "AppOptions.txt"
+    f.write_text(";0 : windowed, 1 : fullscreen, 2 : borderless\nFullScreen 1\n")
+    assert "FullScreen 2" in _fullscreen_warning(f)
+    f.write_text("FullScreen 2\n")
+    assert _fullscreen_warning(f) is None
+    assert _fullscreen_warning(tmp_path / "missing.txt") is None

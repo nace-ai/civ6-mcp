@@ -196,7 +196,19 @@ async def _run_live(args: argparse.Namespace, *, dry_run: bool) -> int:
             objective=args.objective,
             max_options=max_options,
             dry_run=dry_run,
+            game_dead_after_s=float(os.environ.get("GAME_DEAD_AFTER_S", 120.0)),
         )
+
+        async def _relaunch() -> str:
+            # The game process died or its tuner never answers: relaunch and
+            # load the newest per-turn autosave (needs a windowed game).
+            from civ_mcp.autosave import get_autosave_for_turn
+            from civ_mcp.game_launcher import restart_and_load
+
+            turn = gs._high_water_turn
+            latest = get_autosave_for_turn(turn) if turn else None
+            return await restart_and_load(latest)
+
         spectator = None if dry_run or args.no_spectator else LiveSpectator(conn)
         runner = Runner(
             gs,
@@ -206,6 +218,7 @@ async def _run_live(args: argparse.Namespace, *, dry_run: bool) -> int:
             run_meta=meta,
             spectator=spectator,
             on_turn=_progress_line,
+            relaunch=None if dry_run else _relaunch,
         )
         result = await runner.run()
         if dry_run and args.save_fixture and runner.preview:
@@ -268,11 +281,37 @@ def _replay(args: argparse.Namespace) -> int:
     return 0
 
 
+_APP_OPTIONS = Path(
+    "~/Library/Application Support/Sid Meier's Civilization VI/Firaxis Games/"
+    "Sid Meier's Civilization VI/AppOptions.txt"
+).expanduser()
+
+
+def _fullscreen_warning(path: Path = _APP_OPTIONS) -> str | None:
+    """Exclusive fullscreen (FullScreen 1) blocks the OCR-driven relaunch after
+    a crash; borderless (2) or windowed (0) is required for it."""
+    try:
+        for line in path.read_text().splitlines():
+            if line.strip().startswith("FullScreen "):
+                if line.split()[1] == "1":
+                    return (
+                        "FullScreen 1 in AppOptions.txt: automatic game relaunch "
+                        "after a crash needs windowed mode (FullScreen 2)"
+                    )
+                return None
+    except OSError:
+        return None
+    return None
+
+
 async def _probe(args: argparse.Namespace) -> int:
     """Read-only live checks of the queries the controller relies on."""
     from civ_mcp.connection import GameConnection
     from civ_mcp.game_state import GameState
 
+    warning = _fullscreen_warning()
+    if warning:
+        _err(f"warning: {warning}")
     conn = GameConnection(args.host, args.port)
     try:
         await conn.connect()

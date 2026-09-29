@@ -5,10 +5,12 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import time
+import traceback
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
+from civ_mcp.connection import LuaError
 from civ_mcp.drex.candidates import ActionKind
 from civ_mcp.drex.decision_log import DecisionLog
 from civ_mcp.drex.executor import Executor, dispatch_call
@@ -33,6 +35,9 @@ DEFAULT_OBJECTIVE = (
     "research steadily, and keep units and cities safe."
 )
 INTERRUPTION_KEY = "end_turn_interrupted"
+# Tuner-side failures the runner recovers from by reconnecting (never by
+# re-sending a mutation: dispatch errors are reconciled by the executor).
+_IO_ERRORS = (ConnectionError, OSError, LuaError, TimeoutError)
 
 
 @dataclass
@@ -55,6 +60,11 @@ class RunConfig:
     # Pause between repeated blocked end turns so the loop does not hammer
     # the game while it waits for something to change.
     blocked_repeat_wait_s: float = 1.0
+    # Game connection recovery: reconnect backoff, and how long an outage may
+    # last before the game process is relaunched (needs a windowed game).
+    reconnect_backoff_s: float = 1.0
+    reconnect_max_backoff_s: float = 30.0
+    game_dead_after_s: float = 120.0
 
 
 @dataclass
@@ -101,6 +111,8 @@ class Runner:
         run_meta: dict[str, Any] | None = None,
         spectator: Spectator | None = None,
         on_turn: Callable[[dict[str, Any]], None] | None = None,
+        relaunch: Callable[[], Awaitable[str]] | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ):
         if selector is None and not config.dry_run:
             raise ValueError("a selector is required unless dry_run is set")
@@ -141,6 +153,11 @@ class Runner:
         # as "interrupted" instead of spinning.
         self.max_loop_iterations: int | None = None
         self._iterations = 0
+        self._relaunch = relaunch
+        self._clock = clock
+        self._phase = "schedule"
+        self._header_written = False
+        self._io_ok = False
         self._last_observe = {"ms": 0.0, "roundtrips": 0}
         self._turn_stats = {"decisions": 0, "api_ms": 0.0, "roundtrips": 0, "t0": 0.0}
 
@@ -150,6 +167,7 @@ class Runner:
         reactive_from: CoreObservation | None = None,
         refresh: tuple[frozenset[str], CoreObservation] | None = None,
     ) -> CoreObservation:
+        self._phase = "observe"
         t0 = time.perf_counter()
         rt0 = self._roundtrips()
         if reactive_from is not None:
@@ -164,6 +182,8 @@ class Runner:
             "ms": round(ms, 1),
             "roundtrips": self._roundtrips() - rt0,
         }
+        self._io_ok = True
+        self._phase = "schedule"
         self._turn_stats["roundtrips"] += self._last_observe["roundtrips"]
         self._last_core = core
         if self.spectator is not None:
@@ -201,35 +221,75 @@ class Runner:
         return counters()[0] if counters else 0
 
     async def run(self) -> RunResult:
+        """Run to game over or the turn budget. Tuner failures reconnect (and
+        relaunch the game after ``game_dead_after_s``); anything else is logged
+        with a checkpoint and the loop resumes. Only Ctrl-C ends it early."""
         self._t0 = time.perf_counter()
         self._turn_stats["t0"] = self._t0
         if self.spectator is not None:
             self.spectator.start()
+        outage_started: float | None = None
+        relaunched = False
+        attempt = 0
         try:
-            return await self._run()
-        except asyncio.CancelledError:
-            self._write_stop(self._result("interrupted", self._last_core, None))
-            raise
-        except Exception as e:
-            return await self._stop(
-                f"error:{type(e).__name__}: {e}", self._last_core, checkpoint=True
-            )
+            while True:
+                try:
+                    return await self._run()
+                except asyncio.CancelledError:
+                    self._write_stop(self._result("interrupted", self._last_core, None))
+                    raise
+                except _IO_ERRORS as e:
+                    if self._io_ok:
+                        # progress since the last failure: a new outage
+                        attempt, outage_started, relaunched = 0, None, False
+                        self._io_ok = False
+                    attempt += 1
+                    now = self._clock()
+                    if outage_started is None:
+                        outage_started = now
+                    self._log_io_error(e, self._phase, attempt)
+                    wait = min(
+                        self.cfg.reconnect_backoff_s * (2 ** (attempt - 1)),
+                        self.cfg.reconnect_max_backoff_s,
+                    )
+                    await self._sleep(wait)
+                    if (
+                        not relaunched
+                        and self._relaunch is not None
+                        and self._clock() - outage_started >= self.cfg.game_dead_after_s
+                    ):
+                        relaunched = True
+                        result = await self._relaunch()
+                        self.log.write("game_relaunch", {"result": result})
+                    try:
+                        await self.gs.conn.reconnect()
+                    except _IO_ERRORS as re_err:
+                        self._log_io_error(re_err, "reconnect", attempt)
+                        continue
+                except Exception as e:  # noqa: BLE001 — logged with traceback; the run resumes
+                    self.log.write(
+                        "runner_error",
+                        {
+                            "error": f"{type(e).__name__}: {e}",
+                            "traceback": traceback.format_exc()[-4000:],
+                            "phase": self._phase,
+                            "turn": self._last_core.turn if self._last_core else None,
+                        },
+                    )
+                    if self._last_core is not None and not self.cfg.dry_run:
+                        try:
+                            await self._checkpoint(self.gs, self._last_core.turn)
+                        except Exception as ce:  # noqa: BLE001
+                            self.log.write(
+                                "checkpoint_failed",
+                                {"error": f"{type(ce).__name__}: {ce}"},
+                            )
+                    await self._sleep(self.cfg.reconnect_backoff_s)
         finally:
             if self.spectator is not None:
                 await self.spectator.stop()
 
-    def _follow(self, candidate: Any, core: CoreObservation) -> None:
-        if self.spectator is None:
-            return
-        where = focus_point(candidate, core)
-        if where is not None:
-            self.spectator.focus(*where)
-
-    async def _run(self) -> RunResult:
-        core = await self._observe()
-        identity = core.game_identity
-        self.memory.bind_game(identity)
-        self._start_turn = core.turn
+    def _write_header(self, core: CoreObservation) -> None:
         self.log.write(
             "header",
             {
@@ -245,6 +305,34 @@ class Runner:
                 "scheduler_order": list(SCHEDULER_ORDER),
             },
         )
+
+    def _log_io_error(self, e: BaseException, phase: str, attempt: int) -> None:
+        self.log.write(
+            "game_io_error",
+            {
+                "error": f"{type(e).__name__}: {e}",
+                "phase": phase,
+                "attempt": attempt,
+                "turn": self._last_core.turn if self._last_core else None,
+            },
+        )
+
+    def _follow(self, candidate: Any, core: CoreObservation) -> None:
+        if self.spectator is None:
+            return
+        where = focus_point(candidate, core)
+        if where is not None:
+            self.spectator.focus(*where)
+
+    async def _run(self) -> RunResult:
+        core = await self._observe()
+        identity = core.game_identity
+        self.memory.bind_game(identity)
+        if self._start_turn is None:
+            self._start_turn = core.turn
+        if not self._header_written:
+            self._header_written = True
+            self._write_header(core)
         ledger = TurnLedger(turn=core.turn, full_observed=True)
         close_attempts: dict[tuple[int, int], int] = {}
         # An end-turn request the game is still processing (AI turn paused on
@@ -383,9 +471,11 @@ class Runner:
                     # No camera hops or popup dismissals (InGame calls) while
                     # the engine processes the AI turn: they can hang it.
                     self.spectator.quiet(True)
+                self._phase = "end_turn"
                 try:
                     outcome = await self._end_turn(self.gs)
                 finally:
+                    self._phase = "schedule"
                     if self.spectator is not None:
                         self.spectator.quiet(False)
                 elapsed = (time.perf_counter() - t0) * 1000.0
@@ -528,6 +618,7 @@ class Runner:
                 )
                 return await self._stop("dry_run_complete", core, checkpoint=False)
 
+            self._phase = "execute"
             outcome = await self.executor.execute(
                 candidate,
                 point,

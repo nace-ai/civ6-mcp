@@ -319,20 +319,27 @@ def test_dry_run_never_closes_sessions(tmp_path):
     assert game.calls == []
 
 
-def test_unexpected_error_stops_with_record_and_checkpoint(tmp_path):
+def test_lua_error_while_reading_inputs_is_recovered_not_fatal(tmp_path):
     from civ_mcp.connection import LuaError
 
     game = FakeGame()
+    original = game.get_unit_action_space
+    broken_once = {"done": False}
 
     async def broken(unit_index):
-        raise LuaError("ERR: attempt to index a nil value")
+        if not broken_once["done"]:
+            broken_once["done"] = True
+            raise LuaError("ERR: attempt to index a nil value")
+        return await original(unit_index)
 
     game.get_unit_action_space = broken
     runner, checkpoints = _runner(game, tmp_path)
+    runner._sleep = _no_sleep_async
     result = asyncio.run(runner.run())
-    assert result.stop_reason.startswith("error:LuaError")
-    assert checkpoints
-    assert _records(tmp_path)[-1]["type"] == "stop"
+    assert result.stop_reason == "turn_budget_reached" and checkpoints == []
+    err = next(r for r in _records(tmp_path) if r["type"] == "game_io_error")
+    assert "LuaError" in err["error"] and err["phase"] == "schedule"
+    assert [r["type"] for r in _records(tmp_path)].count("header") == 1
 
 
 def test_war_interruption_allows_exactly_one_new_end_turn_request(tmp_path):
