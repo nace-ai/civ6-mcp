@@ -224,3 +224,16 @@ def test_standing_blocker_with_nothing_pending_is_dismissed(tmp_path):
         r for r in recs if r["type"] == "decision" and r["category"] == "captured_city"
     ]
     assert decided and decided[0]["decision"]["candidate_id"] == "captured:65540:keep"
+
+
+def test_captured_city_query_survives_rulesets_without_loyalty():
+    # Base ruleset: GetNextRebelledCity does not exist (loyalty is Rise & Fall);
+    # the probe hit "function expected instead of nil" live. Both lookups are
+    # guarded so the query answers NO_PENDING_CITY instead of raising.
+    lua = build_captured_city_query()
+    assert (
+        "pcall(function() city = player:GetCities():GetNextRebelledCity() end)" in lua
+    )
+    assert (
+        "pcall(function() city = player:GetCities():GetNextCapturedCity() end)" in lua
+    )

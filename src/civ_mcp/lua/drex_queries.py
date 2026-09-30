@@ -372,9 +372,13 @@ def build_captured_city_query() -> str:
     return f"""
 local me = Game.GetLocalPlayer()
 local player = Players[me]
-local city = player:GetCities():GetNextRebelledCity()
-local source = "rebelled"
-if city == nil then city = player:GetCities():GetNextCapturedCity() source = "captured" end
+local city, source = nil, "rebelled"
+-- GetNextRebelledCity exists only with loyalty (Rise & Fall); guard both lookups
+pcall(function() city = player:GetCities():GetNextRebelledCity() end)
+if city == nil then
+  source = "captured"
+  pcall(function() city = player:GetCities():GetNextCapturedCity() end)
+end
 if city == nil then print("NO_PENDING_CITY"); print("{SENTINEL}"); return end
 {_LUA_CIV_NAME}
 local orig, prev, nd = -1, -1, 0
