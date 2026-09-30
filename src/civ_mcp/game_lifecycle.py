@@ -9,6 +9,45 @@ from civ_mcp.connection import GameConnection
 
 log = logging.getLogger(__name__)
 
+# The tutorial advisor dialog; its root may be a child of InGame or a
+# top-level context, so both paths are checked (see spectator._NONCRITICAL_POPUPS).
+EVENT_HOLDING_ADVISOR_PATHS = (
+    "TutorialUIRoot/AdvisorPopup",
+    "/TutorialUIRoot/AdvisorPopup",
+)
+
+
+async def _close_in_own_state(conn: GameConnection, state_name: str, func: str) -> bool:
+    """Call a context's own close function inside its Lua state.
+
+    Views such as AdvisorPopup and DiplomacyActionView take an engine event
+    reference when they open and release it only in their own close path, so
+    hiding them from InGame leaves the engine waiting forever. Returns True
+    when the function ran (whether or not the context was still visible).
+    """
+    states = getattr(conn, "lua_states", None) or {}
+    matches = [idx for idx, name in states.items() if name == state_name]
+    if not matches:
+        return False
+    lua = (
+        f"local ok, err = pcall({func}) "
+        f'if ok then print("CLOSED|{state_name}") else print("CLOSE_FAILED|" .. tostring(err)) end '
+        f'print("{lq.SENTINEL}")'
+    )
+    ran = False
+    for idx in matches:
+        try:
+            lines = await conn.execute_in_state(idx, lua)
+        except Exception as e:  # noqa: BLE001 — best effort; the caller logs
+            log.debug("%s.%s in state %s failed: %s", state_name, func, idx, e)
+            continue
+        for line in lines:
+            if line.startswith("CLOSED|"):
+                ran = True
+            elif line.startswith("CLOSE_FAILED|"):
+                log.warning("%s.%s raised: %s", state_name, func, line.split("|", 1)[1])
+    return ran
+
 
 async def dismiss_popup(conn: GameConnection) -> str:
     """Dismiss any blocking popup or UI overlay in the game.
@@ -39,9 +78,6 @@ async def dismiss_popup(conn: GameConnection) -> str:
         "GreatWorkShowcase",
         "WorldCongressPopup",
         "WorldCongressIntro",
-        # tutorial advisor dialog (see spectator._NONCRITICAL_POPUPS)
-        "TutorialUIRoot/AdvisorPopup",
-        "/TutorialUIRoot/AdvisorPopup",
     ]
     checks = []
     for name in popup_names:
@@ -55,15 +91,20 @@ async def dismiss_popup(conn: GameConnection) -> str:
             f'  print("DISMISSED|{name}") '
             f"end end"
         )
-    # LeaderScene 3D model: SetHide does NOT clear the C++ 3D viewport.
-    # Must fire Events.HideLeaderScreen() to unload the 3D leader model.
+    # Views that hold an engine event (UI.ReferenceCurrentEvent) until their
+    # own close path releases it. SetHide on these leaves the engine waiting
+    # forever: units keep 0 moves, the end-turn button reads PLEASE WAIT and
+    # ACTION_ENDTURN is ignored (seen at T28/T32/T50 on 2026-09-30). They are
+    # only detected here and closed below in their own Lua state.
+    for name in EVENT_HOLDING_ADVISOR_PATHS:
+        path = name if name.startswith("/") else f"/InGame/{name}"
+        checks.append(
+            f'do local c = ContextPtr:LookUpControl("{path}") '
+            f'if c and not c:IsHidden() then print("ADVISOR|{name}") end end'
+        )
     checks.append(
         'do local ls = ContextPtr:LookUpControl("/InGame/LeaderScene") '
-        "if ls and not ls:IsHidden() then "
-        "  pcall(function() Events.HideLeaderScreen() end) "
-        "  ls:SetHide(true) "
-        '  print("DISMISSED|LeaderScene") '
-        "end end"
+        'if ls and not ls:IsHidden() then print("LEADERSCENE") end end'
     )
     # Diplomacy screens: report only, do NOT close sessions.
     # Force-closing sessions via DiplomacyManager.CloseSession() bypasses
@@ -100,19 +141,45 @@ async def dismiss_popup(conn: GameConnection) -> str:
     )
     pending_deal = False
     pending_diplomacy = False
+    advisor_visible = False
+    leader_scene_visible = False
     try:
         lua = " ".join(checks) + f' print("{lq.SENTINEL}")'
         lines = await conn.execute_write(lua)
         for line in lines:
             if line.startswith("DISMISSED|"):
                 dismissed.append(line.split("|", 1)[1])
+            elif line.startswith("ADVISOR|"):
+                advisor_visible = True
+            elif line.strip() == "LEADERSCENE":
+                leader_scene_visible = True
             elif line.startswith("PENDING|"):
                 if "DiplomacyDealView" in line:
                     pending_deal = True
                 elif "DiplomacyActionView" in line:
                     pending_diplomacy = True
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — dismissal is best effort
         log.debug("Phase 1 dismiss failed: %s", e)
+
+    # Phase 1b: event-holding views are closed through their own Lua so the
+    # engine hold is released (AdvisorPopup.Close -> UI.ReleaseEventID;
+    # DiplomacyActionView.UninitializeView -> HideLeaderScreen + release).
+    if advisor_visible:
+        if await _close_in_own_state(conn, "AdvisorPopup", "Close"):
+            dismissed.append("AdvisorPopup")
+        else:
+            log.warning(
+                "AdvisorPopup visible but its Lua state was not found; left open"
+            )
+    # An orphaned leader scene (no open session behind it, e.g. after a war
+    # declaration) is released here. With a session open the leader must be
+    # answered through respond_to_diplomacy; hiding it would freeze the engine.
+    if (
+        leader_scene_visible
+        and not pending_diplomacy
+        and await _close_in_own_state(conn, "DiplomacyActionView", "UninitializeView")
+    ):
+        dismissed.append("LeaderScene")
 
     # Pre-check: single InGame call to detect visible ExclusivePopupManager
     # popups.  Phase 2 scans ~30 Lua states individually (~450ms each = ~13.5s)
