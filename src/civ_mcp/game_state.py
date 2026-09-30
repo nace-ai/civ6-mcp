@@ -166,6 +166,19 @@ class GameState:
         lines = await self.conn.execute_read(lq_drex.build_promotable_units_query())
         return lq_drex.parse_promotable_units(lines)
 
+    async def get_placement_options(
+        self, city_id: int, districts: list[str], wonders: list[str]
+    ) -> tuple[dict[str, list[lq_drex.Placement]], dict[str, str]]:
+        """Advisor tiles for every buildable district/wonder of a city in one
+        round trip. Bypasses the per-turn advisor budget, which exists for LLM
+        agents; the controller reads this once per production decision."""
+        if not districts and not wonders:
+            return {}, {}
+        lines = await self.conn.execute_write(
+            lq_drex.build_placement_batch(city_id, districts, wonders), timeout=15.0
+        )
+        return lq_drex.parse_placement_batch(lines)
+
     async def dismiss_blocker_notifications(self, blocking_types: list[str]) -> str:
         """InGame housekeeping: dismiss the notifications behind stale blockers."""
         lines = await self.conn.execute_write(

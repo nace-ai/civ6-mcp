@@ -107,36 +107,95 @@ def civic_candidates(status: lq.TechCivicStatus) -> list[Candidate]:
     ]
 
 
+def _placement_candidates(
+    city: lq.CityInfo,
+    opt: lq.ProductionOption,
+    tiles: list[Any],
+    per_item: int,
+) -> list[Candidate]:
+    """One candidate per advisor tile (best first) for a district or wonder."""
+    out: list[Candidate] = []
+    name = pretty(opt.item_name)
+    for tile in tiles[:per_item]:
+        params = ProductionParams(
+            city_id=city.city_id,
+            item_type=opt.category,
+            item_name=opt.item_name,
+            target_x=tile.x,
+            target_y=tile.y,
+        )
+        facts: dict = {
+            "category": opt.category.lower(),
+            "cost": opt.cost,
+            "turns": opt.turns,
+            "repair": False,
+            "tile": tile.note,
+            "score": tile.score,
+        }
+        out.append(
+            Candidate.create(
+                ActionKind.SET_PRODUCTION,
+                params,
+                label=f"{name} at ({tile.x},{tile.y})",
+                facts=facts,
+            )
+        )
+    return out
+
+
 def production_candidates(
     city: lq.CityInfo,
     options: list[lq.ProductionOption],
     wonder_types: set[str],
+    placements: dict[str, list[Any]] | None = None,
+    placement_errors: dict[str, str] | None = None,
+    per_item: int = 3,
 ) -> tuple[list[Candidate], list[Exclusion]]:
-    """Offer items that need no placement; districts/wonders are excluded.
+    """Offer every buildable item. Districts and wonders need a tile: with
+    ``placements`` (advisor tiles per item) each gets one candidate per top
+    tile; without, they are excluded as before. Advisor errors exclude the
+    item with the engine's reason.
 
     District repairs carry their own coordinates and are offered. A building
     listed both normally and as a repair is offered once, as the repair.
     """
     by_id: dict[str, Candidate] = {}
     excluded: list[Exclusion] = []
+    errors = placement_errors or {}
     for opt in options:
         target: tuple[int, int] | None = None
-        if opt.category == "DISTRICT":
-            if not (opt.is_repair and opt.repair_x is not None):
+        needs_tile = (opt.category == "DISTRICT" and not opt.is_repair) or (
+            opt.category == "BUILDING"
+            and opt.item_name in wonder_types
+            and not opt.is_repair
+        )
+        if needs_tile:
+            if placements is None and opt.item_name not in errors:
+                what = "district" if opt.category == "DISTRICT" else "wonder"
                 excluded.append(
-                    Exclusion(
-                        opt.item_name, "district requires placement (unsupported)"
-                    )
+                    Exclusion(opt.item_name, f"{what} requires placement (unsupported)")
+                )
+                continue
+            if opt.item_name in errors:
+                excluded.append(
+                    Exclusion(opt.item_name, f"placement: {errors[opt.item_name]}")
+                )
+                continue
+            tiles = (placements or {}).get(opt.item_name) or []
+            if not tiles:
+                excluded.append(Exclusion(opt.item_name, "placement: no valid tile"))
+                continue
+            for cand in _placement_candidates(city, opt, tiles, per_item):
+                by_id.setdefault(cand.candidate_id, cand)
+            continue
+        if opt.category == "DISTRICT":
+            if opt.repair_x is None:
+                excluded.append(
+                    Exclusion(opt.item_name, "district repair without coordinates")
                 )
                 continue
             target = (opt.repair_x, opt.repair_y)
-        elif opt.category == "BUILDING":
-            if opt.item_name in wonder_types and not opt.is_repair:
-                excluded.append(
-                    Exclusion(opt.item_name, "wonder requires placement (unsupported)")
-                )
-                continue
-        elif opt.category not in ("UNIT", "PROJECT"):
+        elif opt.category not in ("UNIT", "PROJECT", "BUILDING"):
             excluded.append(
                 Exclusion(opt.item_name, f"unknown production category {opt.category}")
             )
@@ -672,6 +731,31 @@ def shortlist(
     """
     if len(candidates) <= limit:
         return list(candidates), []
+    # Placement candidates (districts/wonders with a tile) give way first,
+    # worst advisor score first, so plain items are never crowded out.
+    placed = sorted(
+        (
+            c
+            for c in candidates
+            if "score" in c.facts and c.kind is ActionKind.SET_PRODUCTION
+        ),
+        key=lambda c: (c.facts["score"], c.candidate_id),
+    )
+    over = len(candidates) - limit
+    if placed and over > 0:
+        drop_ids = {c.candidate_id for c in placed[:over]}
+        kept = [c for c in candidates if c.candidate_id not in drop_ids]
+        dropped = [
+            Exclusion(
+                c.candidate_id, f"over option limit {limit} (lowest placement score)"
+            )
+            for c in candidates
+            if c.candidate_id in drop_ids
+        ]
+        if len(kept) <= limit:
+            return kept, dropped
+        more_kept, more_dropped = shortlist(kept, limit)
+        return more_kept, dropped + more_dropped
     fixed = [c for c in candidates if c.kind is not ActionKind.MOVE_UNIT]
     moves = sorted(
         (c for c in candidates if c.kind is ActionKind.MOVE_UNIT),

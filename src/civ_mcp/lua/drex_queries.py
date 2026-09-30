@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from civ_mcp.lua._helpers import SENTINEL
+from civ_mcp.lua.batch import build_batch, split_batch
 
 
 @dataclass
@@ -217,3 +218,83 @@ end
 print("OK:DISMISSED|" .. n)
 print("{SENTINEL}")
 """
+
+
+@dataclass
+class Placement:
+    """One candidate tile for a district or wonder, ranked by the advisor."""
+
+    x: int
+    y: int
+    score: int  # district: total adjacency; wonder: displacement score
+    note: str  # terrain and yields, for the option description
+
+
+def build_placement_batch(
+    city_id: int, districts: list[str], wonders: list[str]
+) -> str:
+    """InGame: every district and wonder advisor for one city in one round trip.
+    Sections are ``district:<type>`` / ``wonder:<name>``; each advisor's own
+    ERR: bail stays inside its section."""
+    from civ_mcp import lua as lq
+
+    sections = [
+        (f"district:{d}", lq.build_district_advisor_query(city_id, d))
+        for d in districts
+    ] + [(f"wonder:{w}", lq.build_wonder_advisor_query(city_id, w)) for w in wonders]
+    return build_batch(sections)
+
+
+def parse_placement_batch(
+    lines: list[str],
+) -> tuple[dict[str, list[Placement]], dict[str, str]]:
+    """(placements by item, best first; errors by item)."""
+    from civ_mcp import lua as lq
+
+    sections, errors_by_section = split_batch(lines)
+    placements: dict[str, list[Placement]] = {}
+    errors: dict[str, str] = {}
+    for section, body in sections.items():
+        kind, _, item = section.partition(":")
+        if section in errors_by_section:
+            errors[item] = errors_by_section[section]
+            continue
+        err = next((ln for ln in body if ln.startswith("ERR:")), None)
+        if err is not None:
+            errors[item] = err[len("ERR:") :]
+            continue
+        if kind == "district":
+            found = [
+                Placement(
+                    d.x,
+                    d.y,
+                    d.total_adjacency,
+                    d.terrain_desc
+                    + (
+                        "; " + ", ".join(f"{k}:{v}" for k, v in d.adjacency.items())
+                        if d.adjacency
+                        else ""
+                    ),
+                )
+                for d in lq.parse_district_advisor_response(body)
+            ]
+        else:
+            found = [
+                Placement(
+                    w.x,
+                    w.y,
+                    w.displacement_score,
+                    f"{w.terrain}/{w.feature}"
+                    + ("; river" if w.has_river else "")
+                    + ("; coast" if w.is_coastal else "")
+                    + (
+                        f"; displaces {w.improvement}"
+                        if w.improvement not in ("none", "")
+                        else ""
+                    ),
+                )
+                for w in lq.parse_wonder_advisor_response(body)
+            ]
+        found.sort(key=lambda pl: (-pl.score, pl.x, pl.y))
+        placements[item] = found
+    return placements, errors

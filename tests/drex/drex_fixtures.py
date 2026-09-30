@@ -555,3 +555,20 @@ def city_targets():
         CityAttackTarget(11, 12, "UNIT_WARRIOR", 63, 80, 100),
         CityAttackTarget(12, 12, "UNIT_SLINGER", 63, 30, 100),
     ]
+
+
+def placements():
+    from civ_mcp.lua.drex_queries import Placement
+
+    return {
+        "DISTRICT_HOLY_SITE": [
+            Placement(11, 12, 3, "Plains Hills; faith:3"),
+            Placement(12, 13, 2, "Grass; faith:2"),
+            Placement(9, 12, 1, "Grass; faith:1"),
+            Placement(8, 11, 0, "Plains"),
+        ],
+        "BUILDING_PYRAMIDS": [
+            Placement(10, 13, 2, "TERRAIN_DESERT/none"),
+            Placement(11, 13, 1, "TERRAIN_DESERT_HILLS/none"),
+        ],
+    }

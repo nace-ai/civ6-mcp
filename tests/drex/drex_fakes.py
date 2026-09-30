@@ -81,6 +81,7 @@ class FakeGame:
         self.great_people: list = []
         self.religion_status = fx.religion_founding()
         self.city_targets: dict[int, list] = {}
+        self.placements: dict[int, dict] = {}
         # blockers the fake keeps raising even after the matching action
         self.sticky_blockers: set[str] = set()
         self.fail: dict[str, tuple[Exception, bool]] = {}
@@ -182,6 +183,8 @@ class FakeGame:
         return [copy.deepcopy(c) for c in self.cities.values()], []
 
     async def list_city_production(self, city_id):
+        self.query_counts["list_city_production"] += 1
+        self.conn.roundtrips += 1
         return copy.deepcopy(self.production.get(city_id, []))
 
     async def get_wonder_types(self):
@@ -299,6 +302,13 @@ class FakeGame:
         if any(u.unit_id == unit_id for u in self.promotable):
             return fx.warrior_promotions()
         return lq.UnitPromotionStatus(unit_id, unit_id % 65536, "UNIT_WARRIOR")
+
+    async def get_placement_options(self, city_id, districts, wonders):
+        self.query_counts["get_placement_options"] += 1
+        self.conn.roundtrips += 1
+        wanted = set(districts) | set(wonders)
+        have = self.placements.get(city_id, {})
+        return ({k: copy.deepcopy(v) for k, v in have.items() if k in wanted}, {})
 
     async def get_city_attack_targets(self, city_id):
         self.query_counts["get_city_attack_targets"] += 1

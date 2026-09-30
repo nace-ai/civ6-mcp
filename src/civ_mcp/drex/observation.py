@@ -111,6 +111,8 @@ class DecisionInputs:
     religion_partial: dict[str, str] | None = None  # religion_type, follower_belief
     city_targets: list[Any] | None = None  # lua.drex_queries.CityAttackTarget
     city_attack_city: lq.CityInfo | None = None
+    placements: dict[str, list[Any]] | None = None  # item -> lua.drex_queries.Placement
+    placement_errors: dict[str, str] | None = None
     pantheon: lq.PantheonStatus | None = None
 
 

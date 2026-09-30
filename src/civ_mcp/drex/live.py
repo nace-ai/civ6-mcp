@@ -207,8 +207,30 @@ class LiveObserver:
                     return DecisionInputs()
                 options = await gs.list_city_production(city.city_id)
                 wonders = await self._wonder_types(core.game_identity)
+                districts = [
+                    o.item_name
+                    for o in options
+                    if o.category == "DISTRICT" and not o.is_repair
+                ]
+                wonder_items = [
+                    o.item_name
+                    for o in options
+                    if o.category == "BUILDING"
+                    and o.item_name in wonders
+                    and not o.is_repair
+                ]
+                placements: dict[str, list[Any]] | None = None
+                errors: dict[str, str] | None = None
+                if (districts or wonder_items) and hasattr(gs, "get_placement_options"):
+                    placements, errors = await gs.get_placement_options(
+                        city.city_id, districts, wonder_items
+                    )
                 return DecisionInputs(
-                    city=city, production_options=options, wonder_types=sorted(wonders)
+                    city=city,
+                    production_options=options,
+                    wonder_types=sorted(wonders),
+                    placements=placements,
+                    placement_errors=errors,
                 )
             case DecisionCategory.DIPLOMACY:
                 session = next(

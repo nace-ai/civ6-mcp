@@ -316,8 +316,37 @@ async def _probe_city_attack(gs: Any) -> list[dict[str, Any]]:
     return out
 
 
-# One read-only query per Phase 2 decision kind, for `civ-drex probe --kind`.
+async def _probe_placements(gs: Any) -> list[dict[str, Any]]:
+    cities, _ = await gs.get_cities()
+    wonders = await gs.get_wonder_types()
+    out = []
+    for city in cities:
+        options = await gs.list_city_production(city.city_id)
+        districts = [
+            o.item_name for o in options if o.category == "DISTRICT" and not o.is_repair
+        ]
+        wonder_items = [
+            o.item_name
+            for o in options
+            if o.category == "BUILDING" and o.item_name in wonders and not o.is_repair
+        ]
+        placements, errors = await gs.get_placement_options(
+            city.city_id, districts, wonder_items
+        )
+        out.append(
+            {
+                "city": city.name,
+                "city_id": city.city_id,
+                "placements": placements,
+                "errors": errors,
+            }
+        )
+    return out
+
+
+# One read-only query per Phase 2/3 decision kind, for `civ-drex probe --kind`.
 PROBE_KINDS: dict[str, Callable[[Any], Awaitable[Any]]] = {
+    "placements": _probe_placements,
     "promotion": lambda gs: gs.get_promotable_units(),
     "governor": lambda gs: gs.get_governors(),
     "dedication": lambda gs: gs.get_dedications(),

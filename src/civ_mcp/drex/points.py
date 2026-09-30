@@ -88,7 +88,11 @@ def _enumerate(
         and inputs.production_options is not None
     ):
         cands, excl = production_candidates(
-            inputs.city, inputs.production_options, set(inputs.wonder_types or ())
+            inputs.city,
+            inputs.production_options,
+            set(inputs.wonder_types or ()),
+            placements=inputs.placements,
+            placement_errors=inputs.placement_errors,
         )
         return cands, excl, entity, inputs
     if cat is DecisionCategory.UNIT and inputs.unit and inputs.action_space:

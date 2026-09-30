@@ -395,9 +395,12 @@ class Executor:
                 if options is None:
                     options = await gs.list_city_production(p.city_id)
                 for o in options:
-                    same_target = p.target_x is None or (o.repair_x, o.repair_y) == (
-                        p.target_x,
-                        p.target_y,
+                    # A repair must still point at the same tile; a placement we
+                    # chose only needs the item to still be offered.
+                    same_target = (
+                        p.target_x is None
+                        or (not o.is_repair)
+                        or (o.repair_x, o.repair_y) == (p.target_x, p.target_y)
                     )
                     if (
                         o.category == p.item_type
