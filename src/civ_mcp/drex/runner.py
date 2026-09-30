@@ -693,6 +693,7 @@ class Runner:
                 decision_id=decision_id,
                 max_options=self.cfg.max_options,
                 failed=ledger.failed_candidates,
+                decided_prefixes=ledger.decided_prompt_prefixes,
                 allow_exit=self.scheduler.session_exhausted(ledger, step),
                 exclude_kinds=(
                     frozenset({ActionKind.MOVE_UNIT})

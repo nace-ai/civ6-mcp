@@ -245,3 +245,42 @@ def test_purchase_shortlist_drops_most_expensive_first_and_keeps_save():
 
 def test_production_option_gold_cost_drives_purchasability():
     assert lq.ProductionOption("UNIT", "UNIT_WARRIOR", 40, 8).gold_cost == -1
+
+
+def test_purchase_with_stale_known_treasury_is_refused_by_the_engine():
+    """Review (Phase 5, Important 2): the live loop always passes inputs, so
+    the precheck trusts the observed treasury; a shortfall the engine finds
+    at dispatch must end as rejected, never unknown."""
+    game = FakeGame()
+    game.gold = 300
+    obs = LiveObserver(game)
+    core = asyncio.run(obs.core())
+    point, inputs, _ = _point(obs, core)
+    cand = next(
+        c
+        for c in point.candidates
+        if getattr(c.params, "item_name", "") == "UNIT_BUILDER"
+    )
+    game.gold = 50  # spent after the inputs were read
+    outcome = asyncio.run(
+        Executor(game, sleep=_no_sleep).execute(
+            cand, point, current_version=obs.version, turn=5, inputs=inputs
+        )
+    )
+    assert outcome.status is OutcomeStatus.REJECTED
+    assert "purchase_refused" in outcome.reason
+    assert len([c for c in game.calls if c[0] == "purchase_item"]) == 1
+
+
+def test_every_gold_spending_kind_refreshes_the_overview():
+    from civ_mcp.drex.refresh import refresh_parts
+
+    for kind in (
+        ActionKind.PURCHASE_ITEM,
+        ActionKind.UPGRADE_UNIT,
+        ActionKind.PATRONIZE_GREAT_PERSON,
+        ActionKind.MAKE_TRADE_ROUTE,
+        ActionKind.DEAL_RESPOND,
+        ActionKind.SET_POLICY,
+    ):
+        assert "overview" in refresh_parts(kind), kind

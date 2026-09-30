@@ -207,6 +207,7 @@ def build_decision_point(
     decision_id: str,
     max_options: int,
     failed: frozenset[str] | set[str] = frozenset(),
+    decided_prefixes: frozenset[str] | set[str] = frozenset(),
     exclude_kinds: frozenset[ActionKind] = frozenset(),
     allow_exit: bool = False,
 ) -> tuple[DecisionPoint | None, list[Exclusion]]:
@@ -218,6 +219,12 @@ def build_decision_point(
     for c in candidates:
         if c.candidate_id in failed:
             excluded.append(Exclusion(c.candidate_id, "failed earlier this turn"))
+        elif any(c.candidate_id.startswith(pfx) for pfx in decided_prefixes):
+            excluded.append(
+                Exclusion(
+                    c.candidate_id, "already decided this turn; awaiting the engine"
+                )
+            )
         else:
             untried.append(c)
     exit_only = (

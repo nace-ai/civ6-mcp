@@ -171,6 +171,10 @@ class TurnLedger:
     # re-opened for it once (a blocker raised mid-turn is decided, not dismissed)
     attack_reopened: bool = False
     purchase_offered: bool = False
+    # prompt entities already decided this turn (candidate-id prefixes such as
+    # "captured:65540:"); while the engine still lists them they are not
+    # offered again, so one city is never kept and razed in the same turn
+    decided_prompt_prefixes: set[str] = field(default_factory=set)
     # prompt categories re-opened after their blocker was dismissed and came
     # back the same turn (a second captured city); bounded per category
     prompt_reopens: Counter[str] = field(default_factory=Counter)
@@ -295,6 +299,7 @@ class Scheduler:
             stuck_sessions=set(ledger.stuck_sessions),
             dismissed_blockers=set(ledger.dismissed_blockers),
             prompt_reopens=Counter(ledger.prompt_reopens),
+            decided_prompt_prefixes=set(ledger.decided_prompt_prefixes),
         )
         return self.next(core, trial)
 
@@ -520,6 +525,12 @@ class Scheduler:
             ledger.great_people_offered = True
         if spec.category is DecisionCategory.PURCHASE:
             ledger.purchase_offered = True  # one purchase decision per turn
+        if (
+            spec.category in PROMPT_CATEGORIES
+            and candidate_id
+            and outcome.status in (OutcomeStatus.CONFIRMED, OutcomeStatus.PENDING)
+        ):
+            ledger.decided_prompt_prefixes.add(candidate_id.rsplit(":", 1)[0] + ":")
         if outcome.status not in (OutcomeStatus.CONFIRMED, OutcomeStatus.PENDING):
             ledger.failures[key] += 1
             if candidate_id:

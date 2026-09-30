@@ -297,3 +297,45 @@ def test_a_second_capture_after_dismissal_is_offered_again():
         ledger.dismissed_blockers.update(s.stale_blockers(core, ledger))
         again = s.next(core, ledger)
     assert getattr(again, "category", None) is not DecisionCategory.CAPTURED_CITY
+
+
+def test_a_pending_prompt_is_never_decided_twice_in_a_turn(tmp_path):
+    """Review (Phase 5, Important 1): the engine applies the command later;
+    while the city still sits in the pending slot Drex must not be asked
+    again (it could answer raze after keep)."""
+    from test_drex_runner import PreferSelector, _fake_end_turn, _records
+
+    from civ_mcp.drex.decision_log import DecisionLog
+    from civ_mcp.drex.runner import RunConfig, Runner
+
+    game = FakeGame()
+    game.captured = fx.captured_city()
+    game.extra_blockers = [(RAZE, "Consider city")]
+    game.async_prompts = True  # the fake never applies it: worst-case lag
+    log = DecisionLog(tmp_path / "run.jsonl", run_id="t", secrets=[])
+    runner = Runner(
+        game,
+        PreferSelector(
+            prefixes=(
+                "captured:65540:keep",
+                "captured:65540:raze",
+                "skip:",
+                "research:",
+                "produce:",
+            )
+        ),
+        log,
+        RunConfig(turns=1),
+        end_turn=_fake_end_turn(game),
+    )
+    runner._sleep = _no_sleep
+    runner.max_loop_iterations = 60
+    asyncio.run(runner.run())
+    resolves = [c for c in game.calls if c[0] == "resolve_captured_city"]
+    assert resolves == [("resolve_captured_city", ("keep", 65540))]
+    decided = [
+        r
+        for r in _records(tmp_path)
+        if r["type"] == "decision" and r["category"] == "captured_city"
+    ]
+    assert len(decided) == 1
