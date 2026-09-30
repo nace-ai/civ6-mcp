@@ -38,12 +38,14 @@ def _fake_end_turn(game):
         game.end_turn_attempts = getattr(game, "end_turn_attempts", 0) + 1
         blockers = await game.get_end_turn_blockers()
         before = game.turn
-        if blockers:
+        if blockers or game.sessions:
+            # like the real end turn: an open leader dialogue also refuses
             return EndTurnOutcome(
                 status="blocked",
                 turn_before=before,
                 turn_after=before,
                 blockers=blockers,
+                diplomacy_pending=[s.other_player_id for s in game.sessions],
             )
         game.end_turn_calls += 1
         game.turn += 1
@@ -738,3 +740,48 @@ def test_lua_error_while_reading_inputs_exhausts_the_decision_not_the_run(tmp_pa
         r for r in recs if r["type"] == "decision" and r["category"] == "purchase"
     ]
     assert len(purchases) == 1
+
+
+def test_a_session_nobody_can_decide_is_closed_so_the_turn_can_end(tmp_path):
+    """Live (T28): a diplomacy session stayed open after its decision key was
+    spent; the end turn was refused 94 times in a row. The blocked-repeat
+    path now closes such a session as housekeeping (bounded)."""
+    game = FakeGame()
+    game.sessions = [fx.session(other_player_id=4)]
+
+    async def respond(pid, response):
+        game.calls.append(("diplomacy_respond", (pid, response)))
+        if response == "EXIT":
+            game.sessions = [s for s in game.sessions if s.other_player_id != pid]
+            return "OK:RESPONDED|EXIT|SESSION_CLOSED"
+        return "Error: NO_SESSION|the leader is not listening"
+
+    game.diplomacy_respond = respond
+    runner, checkpoints = _runner(
+        game,
+        tmp_path,
+        selector=PreferSelector(
+            prefixes=(
+                "diplomacy:4:NEGATIVE",
+                "diplomacy:4:POSITIVE",
+                "skip:",
+                "research:",
+                "produce:",
+                "save_gold",
+                "no_diplomacy",
+                "hold_fire",
+            )
+        ),
+    )
+    runner._sleep = _no_sleep_async
+    runner.max_loop_iterations = 150
+    result = asyncio.run(runner.run())
+    assert result.stop_reason == "turn_budget_reached"
+    assert ("diplomacy_respond", (4, "EXIT")) in game.calls
+    recs = _records(tmp_path)
+    hk = [
+        r
+        for r in recs
+        if r["type"] == "housekeeping" and r["action"] == "stuck_session_closed"
+    ]
+    assert hk and hk[0]["player_id"] == 4

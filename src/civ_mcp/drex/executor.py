@@ -244,6 +244,16 @@ def _no(reason: str) -> _Precheck:
     return _Precheck(False, reason)
 
 
+def _game_error_code(raw: str) -> str:
+    """The code of a game refusal, e.g. ``stacking_conflict`` from
+    ``Error: STACKING_CONFLICT|Friendly UNIT_ARCHER already on (59,22)...``."""
+    for line in raw.splitlines():
+        m = re.match(r"\s*(?:Error:\s*|ERR:)\s*([A-Z][A-Z0-9_]{2,})\|", line)
+        if m:
+            return m.group(1).lower()
+    return ""
+
+
 def _game_error(raw: str) -> bool:
     # Some results carry narration before the result line (e.g. attack_unit
     # prepends a combat estimate), so check every line.
@@ -897,6 +907,14 @@ class Executor:
             case ActionKind.MOVE_UNIT:
                 origin = pre["origin"]
                 last = None
+                if _game_error(raw):
+                    # the game refused the move outright (e.g. STACKING_CONFLICT):
+                    # say so instead of polling and reporting "no position change"
+                    return self._unconfirmed(
+                        raw,
+                        _game_error_code(raw) or "move_refused",
+                        position=[origin[0], origin[1]] if origin else None,
+                    )
                 m = re.search(r"\|now_at:(\d+),(\d+)", raw)
                 if m and (int(m.group(1)), int(m.group(2))) == (p.to_x, p.to_y):
                     return confirmed("arrived_from_dispatch", position=[p.to_x, p.to_y])

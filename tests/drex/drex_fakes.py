@@ -100,6 +100,7 @@ class FakeGame:
         self.end_turn_calls = 0
         # like the real game: the move result reports the position read back
         self.move_result_suffix = "|now_at:{x},{y}"
+        self.move_refusal: str | None = None  # e.g. "Error: STACKING_CONFLICT|..."
         self.move_predismiss: list[bool] = []
 
     # ---------------------------------------------------------------- helpers
@@ -413,6 +414,8 @@ class FakeGame:
     async def move_unit(self, unit_index, x, y, predismiss=True):
         fail = self._record("move_unit", unit_index, x, y)
         self.move_predismiss.append(predismiss)
+        if self.move_refusal:
+            return self.move_refusal
         if "move_unit" not in self.ignore:
             self._set_pos(unit_index, x, y, 0.0)
         self._after(fail)

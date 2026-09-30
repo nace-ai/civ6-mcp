@@ -537,6 +537,23 @@ class Scheduler:
             ledger.purchase_offered = True  # one purchase decision per turn
         if spec.category is DecisionCategory.FOREIGN_POLICY:
             ledger.foreign_policy_offered = True  # one diplomatic move per turn
+            if outcome.dispatched and candidate_id:
+                # our own move can open a new dialogue with that leader: the
+                # player's session key starts fresh, whatever happened earlier
+                parts = candidate_id.split(":")
+                if len(parts) >= 2 and parts[1].isdigit():
+                    skey = key_for(
+                        DecisionSpec(DecisionCategory.DIPLOMACY, f"player:{parts[1]}")
+                    )
+                    ledger.resolved.discard(skey)
+                    ledger.exit_offered.discard(skey)
+                    ledger.counts[skey] = 0
+                    ledger.failures[skey] = 0
+                    ledger.failed_candidates = {
+                        c
+                        for c in ledger.failed_candidates
+                        if not c.startswith(f"diplomacy:{parts[1]}:")
+                    }
         if (
             spec.category in PROMPT_CATEGORIES
             and candidate_id

@@ -115,6 +115,40 @@ def _describe_block(outcome: EndTurnOutcome) -> str:
     return ",".join(what) or outcome.status
 
 
+def _mark_tiles_taken_since(
+    inputs: DecisionInputs, before: CoreObservation, now: CoreObservation, unit_id: int
+) -> DecisionInputs:
+    """A prefetched action space is read while the previous unit is still
+    deciding. If that unit (or any other of ours) has since moved onto a tile
+    this unit can reach, the tile is no longer free for the same formation
+    class: the game answers STACKING_CONFLICT. Mark those tiles so they are
+    not offered (20 of 539 unit decisions were wasted this way on 2026-09-30).
+    Combat vs. non-combat stands in for the formation class."""
+    space = getattr(inputs, "action_space", None)
+    me = now.unit(unit_id)
+    if space is None or me is None or not space.reachable:
+        return inputs
+    my_combat = me.combat_strength > 0
+    taken: set[tuple[int, int]] = set()
+    for u in now.units:
+        if u.unit_id == unit_id or (u.combat_strength > 0) != my_combat:
+            continue
+        was = before.unit(u.unit_id)
+        if was is not None and (was.x, was.y) != (u.x, u.y):
+            taken.add((u.x, u.y))
+    if not taken:
+        return inputs
+    reachable = [
+        dataclasses.replace(t, own_stack_conflict=True)
+        if (t.x, t.y) in taken and not t.own_stack_conflict
+        else t
+        for t in space.reachable
+    ]
+    return dataclasses.replace(
+        inputs, action_space=dataclasses.replace(space, reachable=reachable)
+    )
+
+
 def _swallow_task_result(task: asyncio.Task) -> None:
     """Retrieve a cancelled prefetch's result so asyncio does not warn."""
     if not task.cancelled():
@@ -262,7 +296,7 @@ class Runner:
                     and (was.x, was.y, was.moves_remaining)
                     == (now.x, now.y, now.moves_remaining)
                 ):
-                    return task.result()
+                    return _mark_tiles_taken_since(task.result(), before, core, unit_id)
         return await self.observer.inputs(step, core)
 
     def _record_religion_step(
@@ -627,6 +661,35 @@ class Runner:
                         )
                         ledger.blocked_repeats = 0
                         retry_allowed = True
+                        # A dialogue nobody can decide any more (its key spent,
+                        # "close the screen" already offered) would block the
+                        # turn forever: close it as housekeeping, bounded.
+                        for pid in blocked.diplomacy_pending:
+                            sspec = DecisionSpec(
+                                DecisionCategory.DIPLOMACY, f"player:{pid}"
+                            )
+                            if (
+                                self.scheduler._open(ledger, sspec)
+                                or key_for(sspec) not in ledger.exit_offered
+                            ):
+                                continue
+                            n = close_attempts.get((core.turn, pid), 0) + 1
+                            close_attempts[(core.turn, pid)] = n
+                            if n > self.cfg.max_session_close_attempts:
+                                continue
+                            try:
+                                raw_close = await self.gs.diplomacy_respond(pid, "EXIT")
+                            except Exception as ce:  # noqa: BLE001 — logged; the turn continues
+                                raw_close = f"{type(ce).__name__}: {ce}"
+                            self.log.write(
+                                "housekeeping",
+                                {
+                                    "turn": core.turn,
+                                    "action": "stuck_session_closed",
+                                    "player_id": pid,
+                                    "raw": raw_close,
+                                },
+                            )
                         standing = [b[0] for b in blocked.blockers]
                         if standing and all(b in SUPPORTED_BLOCKERS for b in standing):
                             # Supported, yet nothing left to decide: most likely a

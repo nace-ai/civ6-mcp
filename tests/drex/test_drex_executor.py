@@ -935,3 +935,19 @@ def test_every_new_action_kind_has_a_dispatch_mapping():
             assert (call.method, call.args) == expected[kind], kind
         else:
             assert call.method == "__none__", kind
+
+
+def test_move_refused_by_the_game_reports_its_code_without_polling():
+    """A STACKING_CONFLICT refusal used to be reported as 'no_position_change'
+    after 1.5 s of polling; the game's own code is the useful reason."""
+    game = FakeGame()
+    game.move_refusal = (
+        "Error: STACKING_CONFLICT|Friendly UNIT_ARCHER already on (59,22). "
+        "Cannot stack same formation class."
+    )
+    obs, point, inputs, cand = _move_point(game)
+    n = game.query_counts["get_unit_state"]
+    outcome = _execute(game, obs, point, inputs, cand)
+    assert outcome.status is OutcomeStatus.REJECTED
+    assert outcome.reason == "game_error:stacking_conflict"
+    assert game.query_counts["get_unit_state"] == n

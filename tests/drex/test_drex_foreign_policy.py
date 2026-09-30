@@ -237,3 +237,36 @@ def test_diplomacy_query_survives_rulesets_without_grievances():
 
     lua = build_diplomacy_query()
     assert "pcall(function() return pDiplo:GetGrievancesAgainst(i) end)" in lua
+
+
+def test_our_diplomatic_move_reopens_that_players_session_key():
+    """Live (T28): the Egypt session key was spent earlier in the turn; our
+    own friendship declaration opened a new Egypt dialogue that was never
+    decided, and the end turn stayed blocked for 6 minutes."""
+    from civ_mcp.drex.candidates import Candidate, DiplomaticActionParams
+    from civ_mcp.drex.observation import DecisionSpec
+    from civ_mcp.drex.scheduler import key_for
+
+    s = Scheduler()
+    ledger = TurnLedger(turn=5)
+    session_spec = DecisionSpec(DecisionCategory.DIPLOMACY, "player:4")
+    key = key_for(session_spec)
+    ledger.resolved.add(key)
+    ledger.failures[key] = 2
+    ledger.exit_offered.add(key)
+    ledger.failed_candidates.add("diplomacy:4:POSITIVE")
+    cand = Candidate.create(
+        ActionKind.DIPLOMATIC_ACTION,
+        DiplomaticActionParams(4, "Egypt", "DECLARE_FRIENDSHIP"),
+        label="x",
+    )
+    s.note(
+        ledger,
+        DecisionSpec(DecisionCategory.FOREIGN_POLICY, "empire"),
+        cand.kind,
+        ActionOutcome(OutcomeStatus.CONFIRMED, "delivered", True),
+        cand.candidate_id,
+    )
+    assert s._open(ledger, session_spec)
+    assert key not in ledger.exit_offered
+    assert "diplomacy:4:POSITIVE" not in ledger.failed_candidates
