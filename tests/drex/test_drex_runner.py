@@ -110,10 +110,10 @@ def test_one_turn_is_played_with_a_full_trace(tmp_path):
     ]
     recs = _records(tmp_path)
     decisions = [r for r in recs if r["type"] == "decision"]
-    assert len(decisions) == 5
+    assert len(decisions) == 6  # incl. the forced hold-fire city check
     for d in decisions:
         assert d["decision"]["candidate_id"] in {c["id"] for c in d["candidates"]}
-        assert d["dispatch"]["method"] in methods
+        assert d["dispatch"]["method"] in methods or d["category"] == "city_attack"
         assert d["outcome"]["status"] in ("confirmed", "pending")
         assert d["observation_version"].startswith("rome:42:T5:")
     turn = next(r for r in recs if r["type"] == "turn")

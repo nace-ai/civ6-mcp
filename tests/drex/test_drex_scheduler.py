@@ -37,8 +37,16 @@ def _outcome(status=OutcomeStatus.CONFIRMED):
     return ActionOutcome(status, "x", True)
 
 
+def _attacks_checked(core, ledger):
+    """Mark every city's once-per-turn ranged-attack check as done."""
+    for c in core.cities:
+        ledger.resolved.add(f"city_attack:{c.city_id}")
+    return ledger
+
+
 def _next(core, ledger=None, **kw):
-    return Scheduler(**kw).next(core, ledger or TurnLedger(turn=5))
+    ledger = ledger or _attacks_checked(core, TurnLedger(turn=5))
+    return Scheduler(**kw).next(core, ledger)
 
 
 def test_order_is_research_civic_production_then_units():
@@ -54,6 +62,8 @@ def test_order_is_research_civic_production_then_units():
         kind = (
             ActionKind.SKIP_UNIT
             if step.category is DecisionCategory.UNIT
+            else ActionKind.HOLD_FIRE
+            if step.category is DecisionCategory.CITY_ATTACK
             else ActionKind.SET_RESEARCH
         )
         s.note(ledger, step, kind, _outcome())
@@ -61,6 +71,7 @@ def test_order_is_research_civic_production_then_units():
         (DecisionCategory.RESEARCH, "empire"),
         (DecisionCategory.CIVIC, "empire"),
         (DecisionCategory.PRODUCTION, f"city:{fx.CAPITAL_ID}"),
+        (DecisionCategory.CITY_ATTACK, f"city:{fx.CAPITAL_ID}"),
         (DecisionCategory.UNIT, f"unit:{fx.WARRIOR_ID}"),
         (DecisionCategory.UNIT, f"unit:{fx.SETTLER_ID}"),
     ]
@@ -101,8 +112,8 @@ def test_research_in_progress_is_not_redecided():
 
 def test_moving_unit_can_act_again_within_budget():
     s = Scheduler(max_unit_decisions=2)
-    ledger = TurnLedger(turn=5)
     core = _core(research="T", building="UNIT_WARRIOR", units=[fx.warrior()])
+    ledger = _attacks_checked(core, TurnLedger(turn=5))
     spec = s.next(core, ledger)
     s.note(ledger, spec, ActionKind.MOVE_UNIT, _outcome())
     assert s.next(core, ledger) == spec
@@ -112,8 +123,8 @@ def test_moving_unit_can_act_again_within_budget():
 
 def test_partial_move_does_not_finish_the_unit():
     s = Scheduler()
-    ledger = TurnLedger(turn=5)
     core = _core(research="T", building="UNIT_WARRIOR", units=[fx.warrior()])
+    ledger = _attacks_checked(core, TurnLedger(turn=5))
     spec = s.next(core, ledger)
     s.note(ledger, spec, ActionKind.MOVE_UNIT, _outcome(OutcomeStatus.PENDING))
     assert s.next(core, ledger) == spec
@@ -121,8 +132,8 @@ def test_partial_move_does_not_finish_the_unit():
 
 def test_last_permitted_unit_decision_is_flagged():
     s = Scheduler(max_unit_decisions=2)
-    ledger = TurnLedger(turn=5)
     core = _core(research="T", building="UNIT_WARRIOR", units=[fx.warrior()])
+    ledger = _attacks_checked(core, TurnLedger(turn=5))
     spec = s.next(core, ledger)
     assert not s.final_unit_decision(ledger, spec)
     s.note(ledger, spec, ActionKind.MOVE_UNIT, _outcome())
@@ -131,8 +142,8 @@ def test_last_permitted_unit_decision_is_flagged():
 
 def test_non_move_order_finishes_the_unit():
     s = Scheduler()
-    ledger = TurnLedger(turn=5)
     core = _core(research="T", building="UNIT_WARRIOR", units=[fx.warrior()])
+    ledger = _attacks_checked(core, TurnLedger(turn=5))
     spec = s.next(core, ledger)
     s.note(ledger, spec, ActionKind.FORTIFY_UNIT, _outcome(OutcomeStatus.PENDING))
     assert isinstance(s.next(core, ledger), EndTurn)
@@ -142,6 +153,7 @@ def test_repeated_failures_give_up_on_that_key_for_the_turn():
     s = Scheduler(max_failures_per_key=2)
     ledger = TurnLedger(turn=5)
     core = _core(building="UNIT_WARRIOR", units=[])
+    _attacks_checked(core, ledger)
     spec = s.next(core, ledger)
     assert spec.category is DecisionCategory.RESEARCH
     s.note(

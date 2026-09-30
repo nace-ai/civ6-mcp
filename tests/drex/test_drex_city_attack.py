@@ -172,3 +172,51 @@ def test_hold_fire_then_standing_blocker_is_dismissed_as_housekeeping(tmp_path):
         if r["type"] == "housekeeping" and r["action"] == "blocker_dismissed"
     ]
     assert hk and BLOCKER in hk[0]["blockers"]
+
+
+# ------------------------------------ proactive check (no blocker in Base ruleset)
+def test_each_city_gets_a_ranged_attack_check_once_per_turn_without_a_blocker():
+    from civ_mcp.drex.executor import ActionOutcome
+
+    game = FakeGame()
+    game.city_targets = {fx.CAPITAL_ID: fx.city_targets()}
+    core = asyncio.run(LiveObserver(game).core())
+    s = Scheduler()
+    ledger = TurnLedger(turn=5)
+    seen = []
+    for _ in range(30):
+        step = s.next(core, ledger)
+        cat = getattr(step, "category", None)
+        if cat is None:
+            break
+        seen.append(cat)
+        kind = ActionKind.HOLD_FIRE if cat is DecisionCategory.CITY_ATTACK else None
+        s.note(ledger, step, kind, ActionOutcome(OutcomeStatus.CONFIRMED, "x", False))
+    assert seen.count(DecisionCategory.CITY_ATTACK) == 1
+    assert seen.index(DecisionCategory.CITY_ATTACK) > seen.index(
+        DecisionCategory.PRODUCTION
+    )
+    assert seen.index(DecisionCategory.CITY_ATTACK) < seen.index(DecisionCategory.UNIT)
+
+
+def test_proactive_check_with_no_targets_costs_no_drex_call(tmp_path):
+    from test_drex_runner import PreferSelector, _fake_end_turn, _records
+
+    from civ_mcp.drex.decision_log import DecisionLog
+    from civ_mcp.drex.runner import RunConfig, Runner
+
+    game = FakeGame()
+    game.city_targets = {fx.CAPITAL_ID: []}
+    sel = PreferSelector()
+    log = DecisionLog(tmp_path / "run.jsonl", run_id="t", secrets=[])
+    runner = Runner(game, sel, log, RunConfig(turns=1), end_turn=_fake_end_turn(game))
+    asyncio.run(runner.run())
+    atk = [
+        r
+        for r in _records(tmp_path)
+        if r["type"] == "decision" and r["category"] == "city_attack"
+    ]
+    assert len(atk) == 1
+    assert atk[0]["decision"]["rule"] == "forced_single_candidate"
+    assert atk[0]["dispatch"]["method"] is None
+    assert not any(p.category is DecisionCategory.CITY_ATTACK for p in sel.points)

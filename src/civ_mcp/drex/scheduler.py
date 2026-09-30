@@ -44,6 +44,7 @@ SCHEDULER_ORDER = (
     "research: only when none selected",
     "civic: only when none selected",
     "production: empty queues, ascending city id",
+    "city_attack: every city once per turn (attack a target or hold fire)",
     "great_person: forced claim, or once per turn when someone is claimable",
     "unit: moves left, ascending unit id, bounded decisions per unit",
     "end turn",
@@ -395,6 +396,14 @@ class Scheduler:
                 spec = DecisionSpec(DecisionCategory.PRODUCTION, f"city:{city.city_id}")
                 if self._open(ledger, spec):
                     return spec
+
+        # Cities may fire their ranged attack whether or not the engine raises a
+        # blocker for it (the Base ruleset never does): one check per city per
+        # turn; with no targets it resolves as a forced hold fire, no Drex call.
+        for city in sorted(core.cities, key=lambda c: c.city_id):
+            spec = DecisionSpec(DecisionCategory.CITY_ATTACK, f"city:{city.city_id}")
+            if self._open(ledger, spec):
+                return spec
 
         if not ledger.great_people_offered and _claimable(core):
             spec = DecisionSpec(DecisionCategory.GREAT_PERSON, "empire")
