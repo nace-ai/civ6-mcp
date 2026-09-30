@@ -222,6 +222,18 @@ class GameState:
         )
         return _action_result(lines)
 
+    async def get_artifact_choice(self) -> lq_drex.ArtifactChoice | None:
+        """InGame: the excavated artifact awaiting a player choice, or None."""
+        lines = await self.conn.execute_write(lq_drex.build_artifact_choice_query())
+        return lq_drex.parse_artifact_choice(lines)
+
+    async def choose_artifact_player(self, player_id: int) -> str:
+        """InGame: credit the pending artifact to a player the engine offers."""
+        lines = await self.conn.execute_write(
+            lq_drex.build_choose_artifact_player(player_id)
+        )
+        return _action_result(lines)
+
     async def add_belief(self, belief_type: str) -> str:
         """InGame: add a belief to our religion."""
         lines = await self.conn.execute_write(lq_drex.build_add_belief(belief_type))

@@ -368,6 +368,7 @@ PROBE_KINDS: dict[str, Callable[[Any], Awaitable[Any]]] = {
     "blockers": lambda gs: gs.get_end_turn_blocking_types(),
     "captured_city": lambda gs: gs.get_captured_city(),
     "spy_escape": lambda gs: gs.get_spy_escape_choice(),
+    "artifact": lambda gs: gs.get_artifact_choice(),
 }
 
 

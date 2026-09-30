@@ -281,6 +281,8 @@ class LiveObserver:
                 return DecisionInputs(captured_city=await gs.get_captured_city())
             case DecisionCategory.SPY_ESCAPE:
                 return DecisionInputs(spy_escape=await gs.get_spy_escape_choice())
+            case DecisionCategory.ARTIFACT:
+                return DecisionInputs(artifact=await gs.get_artifact_choice())
             case DecisionCategory.RELIGION | DecisionCategory.BELIEF:
                 return DecisionInputs(religion=await gs.get_religion_founding_status())
             case DecisionCategory.GREAT_PERSON:

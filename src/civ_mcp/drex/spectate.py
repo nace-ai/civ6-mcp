@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Protocol
 
 from civ_mcp.drex.candidates import (
     ActionKind,
+    ArtifactParams,
     AttackParams,
     Candidate,
     CapturedCityParams,
@@ -170,6 +171,11 @@ def focus_point(
             return city.x, city.y, candidate.label
         case ActionKind.CHOOSE_ESCAPE_ROUTE, EscapeRouteParams():
             unit = core.unit(p.spy_unit_id)
+            if unit is None:
+                return None
+            return unit.x, unit.y, candidate.label
+        case ActionKind.CHOOSE_ARTIFACT_PLAYER, ArtifactParams():
+            unit = core.unit(p.archaeologist_unit_id)
             if unit is None:
                 return None
             return unit.x, unit.y, candidate.label

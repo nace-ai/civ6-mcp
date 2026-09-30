@@ -86,6 +86,7 @@ class FakeGame:
         self.trade_destinations: list = []
         self.captured = None  # Phase 4: pending captured/rebelled city
         self.spy_escape = None  # Phase 4: caught spy awaiting an escape route
+        self.artifact = None  # Phase 4: artifact awaiting a player choice
         # blockers the fake keeps raising even after the matching action
         self.sticky_blockers: set[str] = set()
         self.fail: dict[str, tuple[Exception, bool]] = {}
@@ -338,6 +339,11 @@ class FakeGame:
         self.query_counts["get_spy_escape_choice"] += 1
         self.conn.roundtrips += 1
         return copy.deepcopy(self.spy_escape)
+
+    async def get_artifact_choice(self):
+        self.query_counts["get_artifact_choice"] += 1
+        self.conn.roundtrips += 1
+        return copy.deepcopy(self.artifact)
 
     async def get_religion_founding_status(self):
         self.query_counts["get_religion_founding_status"] += 1
@@ -624,6 +630,20 @@ class FakeGame:
         ]
         self._after(fail)
         return f"ESCAPE_ROUTE|{name}|{district_type}"
+
+    async def choose_artifact_player(self, player_id):
+        fail = self._record("choose_artifact_player", player_id)
+        if self.artifact is None:
+            return "Error: NO_ARTIFACT"
+        names = {pid: name for pid, name, _ in self.artifact.players}
+        if player_id not in names:
+            return f"Error: PLAYER_NOT_OFFERED|{player_id}"
+        self.artifact = None
+        self.extra_blockers = [
+            b for b in self.extra_blockers if b[0] != "ENDTURN_BLOCKING_ARTIFACT"
+        ]
+        self._after(fail)
+        return f"ARTIFACT_CHOSEN|{names[player_id]}"
 
     async def found_religion(self, religion_type, follower_belief, founder_belief):
         fail = self._record(

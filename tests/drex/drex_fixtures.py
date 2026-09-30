@@ -670,3 +670,23 @@ def spy_escape(routes=("DISTRICT_HARBOR", "DISTRICT_CITY_CENTER")):
         y=15,
         routes=list(routes),
     )
+
+
+ARCHAEOLOGIST_ID = 65700
+
+
+def artifact_choice(choice: bool = True):
+    from civ_mcp.lua.drex_queries import ArtifactChoice
+
+    players = [(0, "Rome", "acting")]
+    if choice:
+        players.append((3, "Greece", "target"))
+    return ArtifactChoice(
+        unit_id=ARCHAEOLOGIST_ID,
+        unit_name="Archaeologist",
+        x=18,
+        y=11,
+        kind="battle site" if choice else "barbarian camp",
+        era="Classical Era",
+        players=players,
+    )

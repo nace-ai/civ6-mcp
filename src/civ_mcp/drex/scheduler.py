@@ -33,6 +33,7 @@ SCHEDULER_ORDER = (
     "deal: pending incoming deals, ascending player id",
     "captured_city: when CONSIDER_RAZE_CITY / CONSIDER_DISLOYAL_CITY blocks (keep, raze, liberate, reject)",
     "spy_escape: when SPY_CHOOSE_ESCAPE_ROUTE / SPY_CHOOSE_DRAGNET_PRIORITY blocks (route per available district)",
+    "artifact: when ARTIFACT blocks (credit the find to a claimant)",
     "government: when CONSIDER_GOVERNMENT_CHANGE blocks",
     "policy: when FILL_CIVIC_SLOT blocks, lowest empty slot",
     "envoy: when GIVE_INFLUENCE_TOKEN blocks",
@@ -83,11 +84,13 @@ SPY_ESCAPE_BLOCKERS = frozenset(
         "ENDTURN_BLOCKING_SPY_CHOOSE_DRAGNET_PRIORITY",
     }
 )
+ARTIFACT_BLOCKER = "ENDTURN_BLOCKING_ARTIFACT"
 # Modal prompts: decided first, repeat while the blocker stands (bounded), and
 # a blocker that stands once nothing is pending is dismissed as housekeeping.
 PROMPT_BLOCKERS: tuple[tuple[frozenset[str], DecisionCategory], ...] = (
     (CAPTURED_CITY_BLOCKERS, DecisionCategory.CAPTURED_CITY),
     (SPY_ESCAPE_BLOCKERS, DecisionCategory.SPY_ESCAPE),
+    (frozenset({ARTIFACT_BLOCKER}), DecisionCategory.ARTIFACT),
 )
 PROMPT_CATEGORIES = frozenset(c for _, c in PROMPT_BLOCKERS)
 
@@ -112,6 +115,7 @@ SUPPORTED_BLOCKERS = frozenset(
         *CITY_ATTACK_BLOCKERS,
         *CAPTURED_CITY_BLOCKERS,
         *SPY_ESCAPE_BLOCKERS,
+        ARTIFACT_BLOCKER,
     }
 )
 # Informational blockers that execute_end_turn clears and logs as housekeeping.
@@ -123,7 +127,6 @@ HOUSEKEEPING_BLOCKERS = frozenset({"ENDTURN_BLOCKING_WORLD_CONGRESS_LOOK"})
 # classified.
 PHASE_LATER_BLOCKERS = frozenset(
     {
-        "ENDTURN_BLOCKING_ARTIFACT",
         "ENDTURN_BLOCKING_EMERGENCY_NEEDS_ATTENTION",
         "ENDTURN_BLOCKING_WORLD_CONGRESS_SESSION",
         "ENDTURN_BLOCKING_WORLD_CONGRESS_SPECIAL_SESSION",

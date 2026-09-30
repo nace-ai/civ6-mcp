@@ -237,7 +237,7 @@ def test_persistently_blocked_end_turn_dismisses_then_keeps_going(tmp_path):
 
 def test_unsupported_blocker_waits_and_logs_instead_of_stopping(tmp_path):
     game = FakeGame()
-    game.extra_blockers = [("ENDTURN_BLOCKING_ARTIFACT", "Choose artifact")]
+    game.extra_blockers = [("ENDTURN_BLOCKING_EMERGENCY_NEEDS_ATTENTION", "Emergency")]
     slept = []
 
     async def sleep(s):
@@ -249,7 +249,9 @@ def test_unsupported_blocker_waits_and_logs_instead_of_stopping(tmp_path):
     result = asyncio.run(runner.run())
     assert result.stop_reason == "interrupted" and checkpoints == []
     recs = [r for r in _records(tmp_path) if r["type"] == "unsupported_blocker"]
-    assert recs and recs[0]["blockers"] == ["ENDTURN_BLOCKING_ARTIFACT"]
+    assert recs and recs[0]["blockers"] == [
+        "ENDTURN_BLOCKING_EMERGENCY_NEEDS_ATTENTION"
+    ]
     assert slept and slept[0] == 30.0
 
 

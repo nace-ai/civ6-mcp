@@ -12,6 +12,7 @@ from civ_mcp import lua as lq
 from civ_mcp.drex.candidates import (
     ActionKind,
     AppointGovernorParams,
+    ArtifactParams,
     AssignGovernorParams,
     AttackParams,
     BeliefParams,
@@ -753,6 +754,20 @@ def escape_route_candidates(choice: Any) -> list[Candidate]:
             facts={"city": choice.city_name, "route_rank": i + 1},
         )
         for i, d in enumerate(choice.routes)
+    ]
+
+
+def artifact_candidates(choice: Any) -> list[Candidate]:
+    """One candidate per civilization the artifact can be credited to (the
+    acting player, plus the target when the engine offers a choice)."""
+    return [
+        Candidate.create(
+            ActionKind.CHOOSE_ARTIFACT_PLAYER,
+            ArtifactParams(choice.unit_id, pid, name),
+            label=f"Credit the artifact to {name}",
+            facts={"role": role, "origin": choice.kind, "era": choice.era},
+        )
+        for pid, name, role in choice.players
     ]
 
 

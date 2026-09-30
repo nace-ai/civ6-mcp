@@ -511,3 +511,95 @@ pcall(function() local popup = ContextPtr:LookUpControl("/InGame/EspionageEscape
 print("OK:ESCAPE_ROUTE|" .. Locale.Lookup(spy:GetName()) .. "|{district_type}")
 print("{SENTINEL}")
 """
+
+
+ARTIFACT_KINDS = {  # kObject.Type in ChooseArtifact.lua; 1, 2 and 5 offer no choice
+    0: "unknown origin",
+    1: "tribal village",
+    2: "barbarian camp",
+    3: "battle site",
+    4: "shipwreck",
+    5: "heroic relic",
+}
+
+
+@dataclass
+class ArtifactChoice:
+    unit_id: int
+    unit_name: str
+    x: int
+    y: int
+    kind: str
+    era: str
+    players: list[tuple[int, str, str]]  # (player_id, civ name, "acting" | "target")
+
+
+def _lua_artifact() -> str:
+    return f"""
+local me = Game.GetLocalPlayer()
+local arch = Players[me]:GetUnits():GetNextExtractingArchaeologist()
+if arch == nil then print("NO_ARTIFACT"); print("{SENTINEL}"); return end
+local idx = arch:GetArchaeology():GetArtifactIndex()
+local obj = Game.GetArtifactByIndex(idx)
+if obj == nil then print("ERR:NO_ARTIFACT_OBJECT"); print("{SENTINEL}"); return end
+{_LUA_CIV_NAME}
+local t = obj.Type or 0
+local acting = obj.ActingPlayerID
+local target = obj.TargetPlayerID
+local hasChoice = (t == 0 or t == 3 or t == 4) and target ~= nil and target >= 0 and target ~= acting
+"""
+
+
+def build_artifact_choice_query() -> str:
+    """InGame: the artifact awaiting a player choice, as ChooseArtifact.lua
+    reads it, and the one or two civilizations it can be credited to."""
+    return f"""
+{_lua_artifact()}
+local era = ""
+pcall(function() era = Locale.Lookup(GameInfo.Eras[obj.ActingPlayerEra].Name) end)
+print("ARTIFACT|" .. (arch:GetID() + me * 65536) .. "|" .. Locale.Lookup(arch:GetName()) .. "|" .. arch:GetX() .. "|" .. arch:GetY() .. "|" .. tostring(t) .. "|" .. era)
+print("PLAYER|" .. tostring(acting) .. "|" .. civName(acting) .. "|acting")
+if hasChoice then print("PLAYER|" .. tostring(target) .. "|" .. civName(target) .. "|target") end
+print("{SENTINEL}")
+"""
+
+
+def parse_artifact_choice(lines: list[str]) -> ArtifactChoice | None:
+    choice: ArtifactChoice | None = None
+    players: list[tuple[int, str, str]] = []
+    for line in lines:
+        if line.startswith("ARTIFACT|"):
+            p = line.split("|")
+            if len(p) >= 7:
+                try:
+                    kind = ARTIFACT_KINDS.get(int(p[5]), "unknown origin")
+                except ValueError:
+                    kind = "unknown origin"
+                choice = ArtifactChoice(
+                    int(p[1]), p[2], int(p[3]), int(p[4]), kind, p[6], []
+                )
+        elif line.startswith("PLAYER|"):
+            p = line.split("|")
+            if len(p) >= 4:
+                players.append((int(p[1]), p[2], p[3].strip()))
+    if choice is None:
+        return None
+    choice.players = players
+    return choice
+
+
+def build_choose_artifact_player(player_id: int) -> str:
+    """InGame: credit the artifact to ``player_id`` (``CHOOSE_ARTIFACT_PLAYER``
+    with ``PARAM_PLAYER_ONE``, as the popup's buttons do) after re-checking
+    that player is one the engine offers."""
+    return f"""
+{_lua_artifact()}
+local pid = {int(player_id)}
+if pid ~= acting and not (hasChoice and pid == target) then print("ERR:PLAYER_NOT_OFFERED|" .. pid); print("{SENTINEL}"); return end
+local params = {{}}
+params[PlayerOperations.PARAM_PLAYER_ONE] = pid
+UI.RequestPlayerOperation(me, PlayerOperations.CHOOSE_ARTIFACT_PLAYER, params)
+pcall(function() local popup = ContextPtr:LookUpControl("/InGame/ChooseArtifact") if popup then popup:SetHide(true) end end)
+print("OK:ARTIFACT_CHOSEN|" .. civName(pid))
+print("{SENTINEL}")
+"""

@@ -48,6 +48,7 @@ _TABLE: dict[ActionKind, frozenset[str]] = {
     ActionKind.MAKE_TRADE_ROUTE: frozenset({"units", "overview"}),
     ActionKind.RESOLVE_CAPTURED_CITY: frozenset({"cities", "units", "overview"}),
     ActionKind.CHOOSE_ESCAPE_ROUTE: frozenset({"units"}),
+    ActionKind.CHOOSE_ARTIFACT_PLAYER: frozenset({"units", "overview"}),
 }
 
 

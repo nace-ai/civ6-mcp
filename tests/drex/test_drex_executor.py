@@ -14,6 +14,7 @@ from civ_mcp.drex.candidates import (
     KeepGovernmentParams,
 )
 from civ_mcp.drex.enumerate import (
+    artifact_candidates,
     belief_candidates,
     captured_city_candidates,
     city_attack_candidates,
@@ -323,6 +324,16 @@ DISPATCH_CASES.append(
         ("choose_spy_escape", ("DISTRICT_HARBOR",)),
     )
 )
+DISPATCH_CASES.append(
+    (
+        _cand(
+            artifact_candidates(fx.artifact_choice()),
+            ActionKind.CHOOSE_ARTIFACT_PLAYER,
+            lambda c: c.params.player_id == 3,
+        ),
+        ("choose_artifact_player", (3,)),
+    )
+)
 
 
 @pytest.mark.parametrize(
@@ -372,6 +383,7 @@ def test_executor_performs_the_mapped_call_and_confirms_or_acknowledges(cand, ex
     game.trade_destinations = fx.trade_destinations()
     game.captured = fx.captured_city()
     game.spy_escape = fx.spy_escape()
+    game.artifact = fx.artifact_choice()
     outcome = _run(game, cand)
     assert game.calls == [expected]
     assert outcome.dispatched is True

@@ -73,3 +73,9 @@ def test_escape_route_refreshes_units():
     assert refresh_parts(ActionKind.CHOOSE_ESCAPE_ROUTE) == frozenset(
         {"units", "blockers", "popup"}
     )
+
+
+def test_artifact_refreshes_units_and_overview():
+    assert refresh_parts(ActionKind.CHOOSE_ARTIFACT_PLAYER) == frozenset(
+        {"units", "overview", "blockers", "popup"}
+    )

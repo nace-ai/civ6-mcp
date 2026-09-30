@@ -29,6 +29,7 @@ from civ_mcp.connection import LuaError
 from civ_mcp.drex.candidates import (
     ActionKind,
     AppointGovernorParams,
+    ArtifactParams,
     AssignGovernorParams,
     AttackParams,
     BeliefParams,
@@ -194,6 +195,8 @@ def dispatch_call(candidate: Candidate) -> DispatchCall:
             return DispatchCall("resolve_city_capture", (p.action,))
         case ActionKind.CHOOSE_ESCAPE_ROUTE, EscapeRouteParams():
             return DispatchCall("choose_spy_escape", (p.district_type,))
+        case ActionKind.CHOOSE_ARTIFACT_PLAYER, ArtifactParams():
+            return DispatchCall("choose_artifact_player", (p.player_id,))
         case (
             (
                 ActionKind.WAIT_GREAT_PERSON
@@ -580,6 +583,17 @@ class Executor:
                     return _no("different_spy_escaping")
                 if p.district_type not in esc.routes:
                     return _no("route_not_available")
+                return _ok()
+
+            case ActionKind.CHOOSE_ARTIFACT_PLAYER:
+                known = self._known.artifact if self._known is not None else None
+                art = known if known is not None else await gs.get_artifact_choice()
+                if art is None:
+                    return _no("no_artifact_pending")
+                if art.unit_id != p.archaeologist_unit_id:
+                    return _no("different_archaeologist")
+                if p.player_id not in {pid for pid, _, _ in art.players}:
+                    return _no("player_not_offered")
                 return _ok()
 
             case ActionKind.CITY_ATTACK:
@@ -975,6 +989,19 @@ class Executor:
                 if await self._poll(spy_gone):
                     return confirmed("spy_no_longer_escaping")
                 return self._unconfirmed(raw, "escape_not_observed")
+
+            case ActionKind.CHOOSE_ARTIFACT_PLAYER:
+                if raw.startswith("ARTIFACT_CHOSEN|"):
+                    return confirmed("artifact_confirmed_from_dispatch")
+                if _game_error(raw):
+                    return self._unconfirmed(raw, "artifact_refused")
+
+                async def artifact_gone():
+                    return (await gs.get_artifact_choice()) is None
+
+                if await self._poll(artifact_gone):
+                    return confirmed("artifact_no_longer_pending")
+                return self._unconfirmed(raw, "artifact_not_observed")
 
             case ActionKind.CITY_ATTACK:
                 if raw.startswith(("CITY_RANGE_ATTACK|", "OK:CITY_RANGE_ATTACK|")):

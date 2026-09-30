@@ -36,6 +36,7 @@ class DecisionCategory(StrEnum):
     CITY_ATTACK = "city_attack"
     CAPTURED_CITY = "captured_city"
     SPY_ESCAPE = "spy_escape"
+    ARTIFACT = "artifact"
 
 
 class ActionKind(StrEnum):
@@ -73,6 +74,7 @@ class ActionKind(StrEnum):
     MAKE_TRADE_ROUTE = "make_trade_route"
     RESOLVE_CAPTURED_CITY = "resolve_captured_city"
     CHOOSE_ESCAPE_ROUTE = "choose_escape_route"
+    CHOOSE_ARTIFACT_PLAYER = "choose_artifact_player"
 
 
 @dataclass(frozen=True)
@@ -270,6 +272,13 @@ class EscapeRouteParams:
     district_type: str
 
 
+@dataclass(frozen=True)
+class ArtifactParams:
+    archaeologist_unit_id: int
+    player_id: int
+    player_name: str
+
+
 ActionParams = (
     ResearchParams
     | CivicParams
@@ -300,6 +309,7 @@ ActionParams = (
     | TradeRouteParams
     | CapturedCityParams
     | EscapeRouteParams
+    | ArtifactParams
 )
 
 PARAMS_FOR_KIND: dict[ActionKind, type] = {
@@ -337,6 +347,7 @@ PARAMS_FOR_KIND: dict[ActionKind, type] = {
     ActionKind.MAKE_TRADE_ROUTE: TradeRouteParams,
     ActionKind.RESOLVE_CAPTURED_CITY: CapturedCityParams,
     ActionKind.CHOOSE_ESCAPE_ROUTE: EscapeRouteParams,
+    ActionKind.CHOOSE_ARTIFACT_PLAYER: ArtifactParams,
 }
 
 
@@ -434,6 +445,10 @@ def candidate_id_for(kind: ActionKind, params: ActionParams) -> str:
             spy_unit_id=u, district_type=d
         ):
             return f"escape:{u}:{d}"
+        case ActionKind.CHOOSE_ARTIFACT_PLAYER, ArtifactParams(
+            archaeologist_unit_id=u, player_id=pid
+        ):
+            return f"artifact:{u}:{pid}"
     raise TypeError(f"{kind} does not accept {type(params).__name__}")
 
 

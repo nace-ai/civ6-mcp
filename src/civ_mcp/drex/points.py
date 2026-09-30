@@ -13,6 +13,7 @@ from civ_mcp.drex.candidates import (
     Exclusion,
 )
 from civ_mcp.drex.enumerate import (
+    artifact_candidates,
     belief_candidates,
     captured_city_candidates,
     city_attack_candidates,
@@ -64,6 +65,7 @@ QUESTIONS: dict[DecisionCategory, str] = {
     DecisionCategory.CITY_ATTACK: "Should this city fire its ranged attack, and at whom?",
     DecisionCategory.CAPTURED_CITY: "What should the empire do with this captured city?",
     DecisionCategory.SPY_ESCAPE: "Which escape route should the caught spy take?",
+    DecisionCategory.ARTIFACT: "Which civilization should this artifact be credited to?",
 }
 
 
@@ -177,6 +179,8 @@ def _enumerate(
         return captured_city_candidates(inputs.captured_city), [], entity, inputs
     if cat is DecisionCategory.SPY_ESCAPE and inputs.spy_escape is not None:
         return escape_route_candidates(inputs.spy_escape), [], entity, inputs
+    if cat is DecisionCategory.ARTIFACT and inputs.artifact is not None:
+        return artifact_candidates(inputs.artifact), [], entity, inputs
     return [], [Exclusion(entity, f"no inputs for {cat}")], entity, inputs
 
 

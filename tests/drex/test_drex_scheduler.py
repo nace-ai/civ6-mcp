@@ -189,11 +189,13 @@ def test_unsupported_blockers_are_reported():
     core = _core(
         blockers=[
             "ENDTURN_BLOCKING_UNITS",
-            "ENDTURN_BLOCKING_ARTIFACT",
+            "ENDTURN_BLOCKING_EMERGENCY_NEEDS_ATTENTION",
             "ENDTURN_BLOCKING_WORLD_CONGRESS_LOOK",
         ]
     )
-    assert Scheduler().unsupported_blockers(core) == ["ENDTURN_BLOCKING_ARTIFACT"]
+    assert Scheduler().unsupported_blockers(core) == [
+        "ENDTURN_BLOCKING_EMERGENCY_NEEDS_ATTENTION"
+    ]
 
 
 def test_deal_session_without_pending_deal_is_a_diplomacy_decision():
