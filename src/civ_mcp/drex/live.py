@@ -253,6 +253,11 @@ class LiveObserver:
                     (s for s in core.diplomacy_sessions if s.other_player_id == eid),
                     None,
                 )
+                if session is not None and hasattr(gs, "get_diplomacy_view_choices"):
+                    # the buttons a human sees: real texts, and the keys to press
+                    choices = await gs.get_diplomacy_view_choices()
+                    if choices:
+                        session = dataclasses.replace(session, choices=choices)
                 return DecisionInputs(session=session)
             case DecisionCategory.DEAL:
                 deal = next(

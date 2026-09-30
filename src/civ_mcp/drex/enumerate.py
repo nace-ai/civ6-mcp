@@ -413,6 +413,33 @@ def diplomacy_candidates(
     """
     if session.is_at_war or session.buttons == "GOODBYE":
         return []
+    keyed = [c for c in session.choices if c.key and c.text]
+    if keyed and not session.deal_summary:
+        # what a human sees on the leader screen: press exactly that button
+        only_exit = all(c.key == "CHOICE_EXIT" for c in keyed)
+        if only_exit and not allow_exit:
+            return []  # goodbye phase: nothing to decide, the runner leaves
+        cands = [
+            Candidate.create(
+                ActionKind.DIPLOMACY_RESPOND,
+                DiplomacyParams(
+                    other_player_id=session.other_player_id, response=c.key
+                ),
+                label=c.text,
+            )
+            for c in keyed
+        ]
+        if allow_exit and not any(c.key == "CHOICE_EXIT" for c in keyed):
+            cands.append(
+                Candidate.create(
+                    ActionKind.DIPLOMACY_RESPOND,
+                    DiplomacyParams(
+                        other_player_id=session.other_player_id, response="EXIT"
+                    ),
+                    label="Close the screen",
+                )
+            )
+        return cands
     if session.deal_summary:
         labels = (("POSITIVE", "Accept the deal"), ("NEGATIVE", "Reject the deal"))
     else:

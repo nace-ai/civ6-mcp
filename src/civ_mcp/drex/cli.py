@@ -192,6 +192,9 @@ async def _run_live(args: argparse.Namespace, *, dry_run: bool) -> int:
     try:
         await conn.connect()
         gs = GameState(conn)
+        # Install the leader-screen choice recorder before any dialogue:
+        # Drex then decides on the real button texts from the first one.
+        await gs.get_diplomacy_view_choices()
         config = RunConfig(
             turns=args.turns if not dry_run else 1,
             objective=args.objective,

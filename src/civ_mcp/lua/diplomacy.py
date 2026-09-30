@@ -8,6 +8,7 @@ from civ_mcp.lua.models import (
     CivInfo,
     DealItem,
     DealOptions,
+    DiplomacyChoice,
     DiplomacyModifier,
     DiplomacySession,
     PendingDeal,
@@ -56,8 +57,8 @@ for i = 0, 62 do
                     local ecName = Locale.Lookup(ec:GetName())
                     local ecPop = ec:GetPopulation()
                     local ecLoy, ecLoyPT = 100, 0
-                    local ecCult = ec:GetCulturalIdentity()
-                    if ecCult then ecLoy = ecCult:GetLoyalty(); ecLoyPT = ecCult:GetLoyaltyPerTurn() end
+                    -- loyalty is a Rise & Fall API: absent in the base ruleset
+                    pcall(function() local ecCult = ec:GetCulturalIdentity(); if ecCult then ecLoy = ecCult:GetLoyalty(); ecLoyPT = ecCult:GetLoyaltyPerTurn() end end)
                     local ecWalls, ecDef = 0, 0
                     pcall(function()
                         for _, d in ec:GetDistricts():Members() do
@@ -266,6 +267,82 @@ for row in GameInfo.DiplomacySelections() do
 end
 print("{SENTINEL}")
 """
+
+
+def build_diplomacy_view_choices() -> str:
+    """Read the choices a human sees on the leader screen (DiplomacyActionView state).
+
+    The buttons are built per statement from ``kParsedStatement.Selections``
+    inside ``ApplyStatement``; nothing keeps the keys afterwards. So this
+    installs (once) a wrapper around the view's global ``ApplyStatement`` that
+    records key + localized text + disabled flag into ``DREX_SELECTIONS``, and
+    clears them in ``UninitializeView``. Output lines:
+      VIEW_HIDDEN | LEADER|<text> | CHOICE|<key>|<text>|<0/1 disabled>
+    Before the hook has seen a statement, choices come from the visible
+    buttons with an empty key.
+    """
+    return f"""
+if not DREX_APPLY_HOOKED and type(ApplyStatement) == "function" then
+    local origApply = ApplyStatement
+    ApplyStatement = function(handler, statementTypeName, statementSubTypeName, toPlayer, kStatement)
+        origApply(handler, statementTypeName, statementSubTypeName, toPlayer, kStatement)
+        pcall(function()
+            local me = Game.GetLocalPlayer()
+            local other = (kStatement.FromPlayer == me) and toPlayer or kStatement.FromPlayer
+            local mood = GetStatementMood(kStatement.FromPlayer, kStatement.FromPlayerMood)
+            local parsed = handler.ExtractStatement(handler, statementTypeName, statementSubTypeName, kStatement.FromPlayer, mood, kStatement.Initiator)
+            handler.RemoveInvalidSelections(parsed, me, other)
+            local out = {{}}
+            for _, sel in ipairs(parsed.Selections or {{}}) do
+                if sel.Key ~= "CHOICE_STOP_ASKING" or not Players[other]:IsHuman() then
+                    out[#out + 1] = {{ Key = tostring(sel.Key), Text = Locale.Lookup(sel.Text), Disabled = (sel.IsDisabled == true) }}
+                end
+            end
+            DREX_SELECTIONS = out
+        end)
+    end
+    if type(UninitializeView) == "function" then
+        local origUninit = UninitializeView
+        UninitializeView = function(...) DREX_SELECTIONS = nil; return origUninit(...) end
+    end
+    DREX_APPLY_HOOKED = true
+end
+if ContextPtr:IsHidden() then
+    print("VIEW_HIDDEN")
+else
+    local okT, t = pcall(function() return Controls.LeaderResponseText:GetText() end)
+    print("LEADER|" .. (tostring(okT and t or "")):gsub("|", "/"))
+    if DREX_SELECTIONS and #DREX_SELECTIONS > 0 then
+        for _, sel in ipairs(DREX_SELECTIONS) do
+            print("CHOICE|" .. sel.Key .. "|" .. (tostring(sel.Text)):gsub("|", "/") .. "|" .. (sel.Disabled and "1" or "0"))
+        end
+    else
+        for _, btn in ipairs(Controls.ConversationSelectionStack:GetChildren()) do
+            if not btn:IsHidden() then
+                local txt = ""
+                pcall(function() txt = btn:GetChildren()[1]:GetText() end)
+                print("CHOICE||" .. (tostring(txt)):gsub("|", "/") .. "|" .. (btn:IsDisabled() and "1" or "0"))
+            end
+        end
+    end
+end
+print("{SENTINEL}")
+"""
+
+
+def parse_diplomacy_view_choices(lines: list[str]) -> list[DiplomacyChoice]:
+    """CHOICE lines -> choices; disabled buttons are skipped."""
+    out: list[DiplomacyChoice] = []
+    for line in lines:
+        if not line.startswith("CHOICE|"):
+            continue
+        parts = line.split("|")
+        if len(parts) < 4 or parts[3].strip() == "1":
+            continue
+        text = parts[2].strip()
+        if text:
+            out.append(DiplomacyChoice(key=parts[1].strip(), text=text))
+    return out
 
 
 def build_diplomacy_respond(other_player_id: int, response: str) -> str:

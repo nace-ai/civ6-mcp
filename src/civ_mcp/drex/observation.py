@@ -295,7 +295,8 @@ def build_context(
             "leader": s.other_leader_name,
             "dialogue": s.dialogue_text,
             "reason": s.reason_text,
-            "visible_buttons": [b for b in s.buttons.split(";") if b],
+            "visible_buttons": [c.text for c in s.choices if c.text]
+            or [b for b in s.buttons.split(";") if b],
         }
     elif cat is DecisionCategory.DEAL and inputs.deal:
         d = inputs.deal
