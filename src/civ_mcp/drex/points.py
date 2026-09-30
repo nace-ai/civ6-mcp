@@ -23,6 +23,7 @@ from civ_mcp.drex.enumerate import (
     diplomacy_candidates,
     envoy_candidates,
     escape_route_candidates,
+    foreign_policy_candidates,
     government_candidates,
     governor_candidates,
     great_person_candidates,
@@ -68,6 +69,7 @@ QUESTIONS: dict[DecisionCategory, str] = {
     DecisionCategory.SPY_ESCAPE: "Which escape route should the caught spy take?",
     DecisionCategory.ARTIFACT: "Which civilization should this artifact be credited to?",
     DecisionCategory.PURCHASE: "Should the empire spend gold now, and on what?",
+    DecisionCategory.FOREIGN_POLICY: "Which diplomatic move should the empire make this turn?",
 }
 
 
@@ -194,6 +196,9 @@ def _enumerate(
             set(inputs.wonder_types or ()),
         )
         return cands, excl, entity, inputs
+    if cat is DecisionCategory.FOREIGN_POLICY and inputs.civs is not None:
+        strength = getattr(core.overview, "military_strength", 0) or 0
+        return foreign_policy_candidates(inputs.civs, strength), [], entity, inputs
     return [], [Exclusion(entity, f"no inputs for {cat}")], entity, inputs
 
 

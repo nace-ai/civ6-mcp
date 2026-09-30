@@ -25,6 +25,7 @@ from civ_mcp.drex.enumerate import (
     diplomacy_candidates,
     envoy_candidates,
     escape_route_candidates,
+    foreign_policy_candidates,
     government_candidates,
     governor_candidates,
     great_person_candidates,
@@ -373,6 +374,38 @@ DISPATCH_CASES.append(
 )
 
 
+_FP_CIVS = fx.civs()
+_FP_CIVS[0].available_actions = ["DIPLOMATIC_DELEGATION", "MAKE_ALLIANCE"]
+DISPATCH_CASES.extend(
+    [
+        (
+            _cand(
+                foreign_policy_candidates(_FP_CIVS, 100),
+                ActionKind.DIPLOMATIC_ACTION,
+                lambda c: c.params.action == "DIPLOMATIC_DELEGATION",
+            ),
+            ("send_diplomatic_action", (1, "DIPLOMATIC_DELEGATION")),
+        ),
+        (
+            _cand(
+                foreign_policy_candidates(_FP_CIVS, 100),
+                ActionKind.PROPOSE_PEACE,
+                lambda c: True,
+            ),
+            ("propose_peace", (2,)),
+        ),
+        (
+            _cand(
+                foreign_policy_candidates(_FP_CIVS, 100),
+                ActionKind.FORM_ALLIANCE,
+                lambda c: True,
+            ),
+            ("form_alliance", (1, "MILITARY")),
+        ),
+    ]
+)
+
+
 @pytest.mark.parametrize(
     "cand,expected", DISPATCH_CASES, ids=[c.candidate_id for c, _ in DISPATCH_CASES]
 )
@@ -388,6 +421,7 @@ NO_DISPATCH_KINDS = {
     ActionKind.CHOOSE_FOLLOWER_BELIEF,
     ActionKind.HOLD_FIRE,
     ActionKind.SAVE_GOLD,
+    ActionKind.NO_DIPLOMACY,
 }
 # Phase 2 kinds whose candidate builders and fakes land in later tasks; each
 # task removes its kinds here and adds them to DISPATCH_CASES.
@@ -427,6 +461,12 @@ def test_executor_performs_the_mapped_call_and_confirms_or_acknowledges(cand, ex
         game.gold = 500
     if cand.kind is ActionKind.PURCHASE_ITEM:
         game.gold = 500
+    if cand.kind in (
+        ActionKind.DIPLOMATIC_ACTION,
+        ActionKind.FORM_ALLIANCE,
+        ActionKind.PROPOSE_PEACE,
+    ):
+        game.civs = copy.deepcopy(_FP_CIVS)
     outcome = _run(game, cand)
     assert game.calls == [expected]
     assert outcome.dispatched is True

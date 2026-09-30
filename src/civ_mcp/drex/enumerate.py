@@ -11,6 +11,7 @@ from typing import Any
 from civ_mcp import lua as lq
 from civ_mcp.drex.candidates import (
     ActionKind,
+    AllianceParams,
     AppointGovernorParams,
     ArtifactParams,
     AssignGovernorParams,
@@ -23,6 +24,7 @@ from civ_mcp.drex.candidates import (
     DealParams,
     DedicationParams,
     DiplomacyParams,
+    DiplomaticActionParams,
     EnvoyParams,
     EscapeRouteParams,
     Exclusion,
@@ -33,7 +35,9 @@ from civ_mcp.drex.candidates import (
     ImproveParams,
     KeepGovernmentParams,
     MoveParams,
+    NoDiplomacyParams,
     PantheonParams,
+    PeaceParams,
     PolicyParams,
     ProductionParams,
     PromoteGovernorParams,
@@ -864,6 +868,92 @@ def purchase_candidates(
         )
     )
     return out, excluded
+
+
+_DIPLO_LABELS = {
+    "DIPLOMATIC_DELEGATION": "Send a delegation to {civ} (25 gold)",
+    "DECLARE_FRIENDSHIP": "Declare friendship with {civ}",
+    "RESIDENT_EMBASSY": "Open an embassy with {civ}",
+    "DENOUNCE": "Denounce {civ}",
+    "OPEN_BORDERS": "Propose mutual open borders with {civ}",
+    "DECLARE_SURPRISE_WAR": "Declare a surprise war on {civ}",
+    "DECLARE_FORMAL_WAR": "Declare a formal war on {civ}",
+}
+
+
+def _civ_facts(civ: Any, our_strength: int) -> dict[str, Any]:
+    return {
+        "civilization": civ.civ_name,
+        "leader": civ.leader_name,
+        "relationship": civ.diplomatic_state,
+        "relationship_score": civ.relationship_score,
+        "their_military_strength": civ.military_strength,
+        "our_military_strength": our_strength,
+        "their_cities": civ.num_cities,
+        "grievances": civ.grievances,
+        "alliance": civ.alliance_type,
+        "they_have_delegation": civ.they_have_delegation,
+        "we_have_embassy": civ.has_embassy,
+    }
+
+
+def foreign_policy_candidates(civs: list[Any], our_strength: int) -> list[Candidate]:
+    """One candidate per (met civilization, action the engine currently
+    allows) plus "no diplomatic action". A civ we are at war with gets only
+    "propose peace". War types follow the engine's DECLARE_WAR flag: surprise
+    war always, formal war too once the civ has been denounced."""
+    out: list[Candidate] = []
+    for civ in sorted(civs, key=lambda c: c.player_id):
+        if not civ.has_met:
+            continue
+        facts = _civ_facts(civ, our_strength)
+        if civ.is_at_war:
+            out.append(
+                Candidate.create(
+                    ActionKind.PROPOSE_PEACE,
+                    PeaceParams(civ.player_id, civ.civ_name),
+                    label=f"Propose peace to {civ.civ_name}",
+                    facts=facts,
+                )
+            )
+            continue
+        actions: list[str] = []
+        for label in civ.available_actions or []:
+            if label.startswith("Open Borders"):
+                actions.append("OPEN_BORDERS")
+            elif label == "DECLARE_WAR":
+                actions.append("DECLARE_SURPRISE_WAR")
+                if civ.diplomatic_state == "DENOUNCED":
+                    actions.append("DECLARE_FORMAL_WAR")
+            elif label == "MAKE_ALLIANCE":
+                out.append(
+                    Candidate.create(
+                        ActionKind.FORM_ALLIANCE,
+                        AllianceParams(civ.player_id, civ.civ_name, "MILITARY"),
+                        label=f"Form an alliance with {civ.civ_name}",
+                        facts=facts,
+                    )
+                )
+            elif label in _DIPLO_LABELS:
+                actions.append(label)
+        for action in actions:
+            out.append(
+                Candidate.create(
+                    ActionKind.DIPLOMATIC_ACTION,
+                    DiplomaticActionParams(civ.player_id, civ.civ_name, action),
+                    label=_DIPLO_LABELS[action].format(civ=civ.civ_name),
+                    facts=facts,
+                )
+            )
+    out.append(
+        Candidate.create(
+            ActionKind.NO_DIPLOMACY,
+            NoDiplomacyParams(),
+            label="No diplomatic action this turn",
+            facts={"met_civilizations": sum(1 for c in civs if c.has_met)},
+        )
+    )
+    return out
 
 
 def trade_route_candidates(

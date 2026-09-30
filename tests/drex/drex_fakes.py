@@ -90,6 +90,8 @@ class FakeGame:
         self.artifact = None  # Phase 4: artifact awaiting a player choice
         self.stacked_units_on_tile: set[str] = set()  # Phase 5: purchases refused
         self.turn_active = True  # False while the engine processes the AI turn
+        self.civs = fx.civs()  # Phase 6: foreign policy
+        self.war_uncertain = False
         # blockers the fake keeps raising even after the matching action
         self.sticky_blockers: set[str] = set()
         self.fail: dict[str, tuple[Exception, bool]] = {}
@@ -147,6 +149,11 @@ class FakeGame:
         self.query_counts["is_turn_active"] += 1
         self.conn.roundtrips += 1
         return self.turn_active
+
+    async def get_diplomacy(self):
+        self.query_counts["get_diplomacy"] += 1
+        self.conn.roundtrips += 1
+        return copy.deepcopy(self.civs)
 
     async def get_game_identity(self):
         return (self.civ, self.seed)
@@ -510,6 +517,53 @@ class FakeGame:
         had, self.gold = self.gold, self.gold - opt.gold_cost
         self._after(fail)
         return f"PURCHASED|{item_name}|cost={opt.gold_cost}g (had {int(had)}g)"
+
+    def _civ(self, pid):
+        return next((c for c in self.civs if c.player_id == pid), None)
+
+    async def send_diplomatic_action(self, other_player_id, action):
+        fail = self._record("send_diplomatic_action", other_player_id, action)
+        civ = self._civ(other_player_id)
+        if civ is None or not civ.has_met:
+            return "Error: NOT_MET|Have not met this civilization"
+        listed = civ.available_actions or []
+        if action.startswith("DECLARE_") and action.endswith("_WAR"):
+            if "DECLARE_WAR" not in listed:
+                return "Error: CANNOT_DECLARE_WAR|not allowed"
+            civ.is_at_war, civ.diplomatic_state = True, "WAR"
+            civ.available_actions = []
+            self._after(fail)
+            if self.war_uncertain:
+                return "WARN:WAR_UNCERTAIN|declared"
+            return f"WAR_DECLARED|{civ.civ_name}"
+        key = "Open Borders" if action == "OPEN_BORDERS" else action
+        if not any(a.startswith(key) for a in listed):
+            return f"Error: ACTION_INVALID|{action} not available"
+        civ.available_actions = [a for a in listed if not a.startswith(key)]
+        self._after(fail)
+        if action == "DECLARE_FRIENDSHIP":
+            return f"ACCEPTED|{civ.civ_name} accepted friendship"
+        return f"SENT|{action} to {civ.civ_name}"
+
+    async def propose_peace(self, other_player_id):
+        fail = self._record("propose_peace", other_player_id)
+        civ = self._civ(other_player_id)
+        if civ is None or not civ.is_at_war:
+            return "Error: NOT_AT_WAR|"
+        self._after(fail)
+        return f"REJECTED|{civ.civ_name} rejected your peace offer"
+
+    async def form_alliance(self, other_player_id, alliance_type):
+        fail = self._record("form_alliance", other_player_id, alliance_type)
+        civ = self._civ(other_player_id)
+        if civ is None or "MAKE_ALLIANCE" not in (civ.available_actions or []):
+            return "Error: NOT_FRIENDS|Must be declared friends first"
+        civ.alliance_type = alliance_type
+        civ.available_actions = [
+            a for a in civ.available_actions if a != "MAKE_ALLIANCE"
+        ]
+        self._after(fail)
+        return f"ALLIANCE_FORMED|{civ.civ_name}"
 
     async def diplomacy_respond(self, other_player_id, response):
         fail = self._record("diplomacy_respond", other_player_id, response)

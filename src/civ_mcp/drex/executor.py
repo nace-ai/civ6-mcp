@@ -28,6 +28,7 @@ from typing import Any
 from civ_mcp.connection import LuaError
 from civ_mcp.drex.candidates import (
     ActionKind,
+    AllianceParams,
     AppointGovernorParams,
     ArtifactParams,
     AssignGovernorParams,
@@ -41,6 +42,7 @@ from civ_mcp.drex.candidates import (
     DecisionPoint,
     DedicationParams,
     DiplomacyParams,
+    DiplomaticActionParams,
     EnvoyParams,
     EscapeRouteParams,
     FoundReligionParams,
@@ -50,6 +52,7 @@ from civ_mcp.drex.candidates import (
     KeepGovernmentParams,
     MoveParams,
     PantheonParams,
+    PeaceParams,
     PolicyParams,
     ProductionParams,
     PromoteGovernorParams,
@@ -205,6 +208,12 @@ def dispatch_call(candidate: Candidate) -> DispatchCall:
             return DispatchCall(
                 "purchase_item", (p.city_id, p.item_type, p.item_name, "YIELD_GOLD")
             )
+        case ActionKind.DIPLOMATIC_ACTION, DiplomaticActionParams():
+            return DispatchCall("send_diplomatic_action", (p.player_id, p.action))
+        case ActionKind.PROPOSE_PEACE, PeaceParams():
+            return DispatchCall("propose_peace", (p.player_id,))
+        case ActionKind.FORM_ALLIANCE, AllianceParams():
+            return DispatchCall("form_alliance", (p.player_id, p.alliance_type))
         case (
             (
                 ActionKind.WAIT_GREAT_PERSON
@@ -212,6 +221,7 @@ def dispatch_call(candidate: Candidate) -> DispatchCall:
                 | ActionKind.CHOOSE_FOLLOWER_BELIEF
                 | ActionKind.HOLD_FIRE
                 | ActionKind.SAVE_GOLD
+                | ActionKind.NO_DIPLOMACY
             ),
             _,
         ):
@@ -554,6 +564,7 @@ class Executor:
                 | ActionKind.CHOOSE_FOLLOWER_BELIEF
                 | ActionKind.HOLD_FIRE
                 | ActionKind.SAVE_GOLD
+                | ActionKind.NO_DIPLOMACY
             ):
                 return _ok()
 
@@ -640,6 +651,40 @@ class Executor:
                 if gold < opt.gold_cost:
                     return _no("treasury_short")
                 return _ok(gold=gold)
+
+            case (
+                ActionKind.DIPLOMATIC_ACTION
+                | ActionKind.PROPOSE_PEACE
+                | ActionKind.FORM_ALLIANCE
+            ):
+                known_civs = self._known.civs if self._known is not None else None
+                civs = (
+                    known_civs if known_civs is not None else await gs.get_diplomacy()
+                )
+                civ = next((c for c in civs if c.player_id == p.player_id), None)
+                if civ is None or not civ.has_met:
+                    return _no("civilization_not_met")
+                listed = civ.available_actions or []
+                if c.kind is ActionKind.PROPOSE_PEACE:
+                    return _ok() if civ.is_at_war else _no("not_at_war")
+                if civ.is_at_war:
+                    return _no("at_war")
+                if c.kind is ActionKind.FORM_ALLIANCE:
+                    return (
+                        _ok()
+                        if "MAKE_ALLIANCE" in listed
+                        else _no("alliance_not_available")
+                    )
+                action = p.action
+                if action.startswith("DECLARE_") and action.endswith("_WAR"):
+                    wanted = "DECLARE_WAR"
+                elif action == "OPEN_BORDERS":
+                    wanted = "Open Borders"
+                else:
+                    wanted = action
+                if not any(a.startswith(wanted) for a in listed):
+                    return _no("action_not_available")
+                return _ok()
 
             case ActionKind.CITY_ATTACK:
                 known = self._known.city_targets if self._known is not None else None
@@ -1092,6 +1137,34 @@ class Executor:
                 if await self._poll(gold_spent):
                     return confirmed("gold_spent")
                 return self._unconfirmed(raw, "purchase_not_observed")
+
+            case (
+                ActionKind.DIPLOMATIC_ACTION
+                | ActionKind.PROPOSE_PEACE
+                | ActionKind.FORM_ALLIANCE
+            ):
+                # The move happened whether the AI agreed or not: SENT/ACCEPTED/
+                # REJECTED are all answers, and an answer is the postcondition.
+                first = raw.splitlines()[0] if raw else ""
+                if first.startswith(
+                    (
+                        "ACCEPTED|",
+                        "SENT|",
+                        "WAR_DECLARED|",
+                        "SESSION_CLOSED",
+                        "ALLIANCE_FORMED|",
+                    )
+                ):
+                    return confirmed("diplomatic_action_delivered", answer=first)
+                if first.startswith("REJECTED|"):
+                    return confirmed("offer_declined", answer=first)
+                if first.startswith("WARN:") or "WAR_UNCERTAIN" in first:
+                    return ActionOutcome(
+                        OutcomeStatus.PENDING, "war_declaration_unconfirmed", True
+                    )
+                if _game_error(raw):
+                    return self._unconfirmed(raw, "diplomacy_refused")
+                return self._unconfirmed(raw, "diplomacy_not_observed")
 
             case ActionKind.CITY_ATTACK:
                 if raw.startswith(("CITY_RANGE_ATTACK|", "OK:CITY_RANGE_ATTACK|")):

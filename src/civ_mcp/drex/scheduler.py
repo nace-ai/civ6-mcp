@@ -49,6 +49,7 @@ SCHEDULER_ORDER = (
     "production: empty queues, ascending city id",
     "city_attack: every city once per turn (attack a target or hold fire)",
     "purchase: once per turn when the treasury holds PURCHASE_MIN_GOLD or more (buy an affordable item in a city, or save the gold)",
+    "foreign_policy: once per turn (delegation, friendship, embassy, denounce, open borders, alliance, war, peace, or nothing)",
     "great_person: forced claim, or once per turn when someone is claimable",
     "unit: moves left, ascending unit id, bounded decisions per unit",
     "end turn",
@@ -171,6 +172,7 @@ class TurnLedger:
     # re-opened for it once (a blocker raised mid-turn is decided, not dismissed)
     attack_reopened: bool = False
     purchase_offered: bool = False
+    foreign_policy_offered: bool = False
     hang_relaunches: int = 0  # AI-turn hang relaunches this turn (bounded to one)
     # prompt entities already decided this turn (candidate-id prefixes such as
     # "captured:65540:"); while the engine still lists them they are not
@@ -195,6 +197,7 @@ def key_for(spec: DecisionSpec) -> str:
         DecisionCategory.RELIGION,
         DecisionCategory.BELIEF,
         DecisionCategory.PURCHASE,
+        DecisionCategory.FOREIGN_POLICY,
         *PROMPT_CATEGORIES,
     ):
         return str(spec.category)
@@ -498,6 +501,11 @@ class Scheduler:
             if self._open(ledger, spec):
                 return spec
 
+        if not ledger.foreign_policy_offered:
+            spec = DecisionSpec(DecisionCategory.FOREIGN_POLICY, "empire")
+            if self._open(ledger, spec):
+                return spec
+
         if not ledger.great_people_offered and _claimable(core):
             spec = DecisionSpec(DecisionCategory.GREAT_PERSON, "empire")
             if self._open(ledger, spec):
@@ -526,6 +534,8 @@ class Scheduler:
             ledger.great_people_offered = True
         if spec.category is DecisionCategory.PURCHASE:
             ledger.purchase_offered = True  # one purchase decision per turn
+        if spec.category is DecisionCategory.FOREIGN_POLICY:
+            ledger.foreign_policy_offered = True  # one diplomatic move per turn
         if (
             spec.category in PROMPT_CATEGORIES
             and candidate_id

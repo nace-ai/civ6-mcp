@@ -690,3 +690,40 @@ def artifact_choice(choice: bool = True):
         era="Classical Era",
         players=players,
     )
+
+
+def civs():
+    """Three met/unmet civs for the foreign-policy decision."""
+    return [
+        lq.CivInfo(
+            player_id=1,
+            civ_name="Egypt",
+            leader_name="Cleopatra",
+            has_met=True,
+            is_at_war=False,
+            diplomatic_state="NEUTRAL",
+            relationship_score=-3,
+            available_actions=["DIPLOMATIC_DELEGATION", "DECLARE_WAR"],
+            military_strength=120,
+            num_cities=3,
+        ),
+        lq.CivInfo(
+            player_id=2,
+            civ_name="Greece",
+            leader_name="Gorgo",
+            has_met=True,
+            is_at_war=True,
+            diplomatic_state="WAR",
+            relationship_score=-40,
+            available_actions=["DIPLOMATIC_DELEGATION"],
+            military_strength=300,
+            num_cities=5,
+        ),
+        lq.CivInfo(
+            player_id=3,
+            civ_name="Sumeria",
+            leader_name="Gilgamesh",
+            has_met=False,
+            is_at_war=False,
+        ),
+    ]

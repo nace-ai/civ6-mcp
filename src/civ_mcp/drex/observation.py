@@ -123,6 +123,8 @@ class DecisionInputs:
     # Phase 5 purchases: production lists per city and the treasury observed
     purchase_options: dict[int, list[lq.ProductionOption]] | None = None
     treasury: float | None = None
+    # Phase 6 foreign policy: every known civilization with the engine's allowed actions
+    civs: list[lq.CivInfo] | None = None
 
 
 @dataclass

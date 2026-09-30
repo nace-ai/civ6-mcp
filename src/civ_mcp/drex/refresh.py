@@ -52,6 +52,10 @@ _TABLE: dict[ActionKind, frozenset[str]] = {
     ActionKind.UPGRADE_UNIT: frozenset({"units", "overview"}),
     ActionKind.PURCHASE_ITEM: frozenset({"overview", "cities", "units"}),
     ActionKind.SAVE_GOLD: frozenset(),
+    ActionKind.DIPLOMATIC_ACTION: frozenset({"overview", "sessions", "deals"}),
+    ActionKind.PROPOSE_PEACE: frozenset({"overview", "sessions", "deals"}),
+    ActionKind.FORM_ALLIANCE: frozenset({"overview", "sessions", "deals"}),
+    ActionKind.NO_DIPLOMACY: frozenset(),
 }
 
 

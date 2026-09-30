@@ -92,3 +92,15 @@ def test_purchase_refreshes_overview_cities_units_and_save_only_blockers():
         {"overview", "cities", "units", "blockers", "popup"}
     )
     assert refresh_parts(ActionKind.SAVE_GOLD) == frozenset({"blockers", "popup"})
+
+
+def test_foreign_policy_kinds_refresh_overview_sessions_deals():
+    for k in (
+        ActionKind.DIPLOMATIC_ACTION,
+        ActionKind.PROPOSE_PEACE,
+        ActionKind.FORM_ALLIANCE,
+    ):
+        assert refresh_parts(k) == frozenset(
+            {"overview", "sessions", "deals", "blockers", "popup"}
+        ), k
+    assert refresh_parts(ActionKind.NO_DIPLOMACY) == frozenset({"blockers", "popup"})

@@ -38,6 +38,7 @@ class DecisionCategory(StrEnum):
     SPY_ESCAPE = "spy_escape"
     ARTIFACT = "artifact"
     PURCHASE = "purchase"
+    FOREIGN_POLICY = "foreign_policy"
 
 
 class ActionKind(StrEnum):
@@ -79,6 +80,10 @@ class ActionKind(StrEnum):
     UPGRADE_UNIT = "upgrade_unit"
     PURCHASE_ITEM = "purchase_item"
     SAVE_GOLD = "save_gold"  # no dispatch: a real "buy nothing" choice
+    DIPLOMATIC_ACTION = "diplomatic_action"
+    PROPOSE_PEACE = "propose_peace"
+    FORM_ALLIANCE = "form_alliance"
+    NO_DIPLOMACY = "no_diplomacy"  # no dispatch: a real "do nothing" choice
 
 
 @dataclass(frozen=True)
@@ -304,6 +309,32 @@ class SaveGoldParams:
     pass
 
 
+@dataclass(frozen=True)
+class DiplomaticActionParams:
+    player_id: int
+    civ_name: str
+    action: str  # DIPLOMATIC_DELEGATION, DECLARE_FRIENDSHIP, RESIDENT_EMBASSY,
+    # DENOUNCE, OPEN_BORDERS, DECLARE_SURPRISE_WAR, DECLARE_FORMAL_WAR
+
+
+@dataclass(frozen=True)
+class PeaceParams:
+    player_id: int
+    civ_name: str
+
+
+@dataclass(frozen=True)
+class AllianceParams:
+    player_id: int
+    civ_name: str
+    alliance_type: str
+
+
+@dataclass(frozen=True)
+class NoDiplomacyParams:
+    pass
+
+
 ActionParams = (
     ResearchParams
     | CivicParams
@@ -338,6 +369,10 @@ ActionParams = (
     | UpgradeParams
     | PurchaseParams
     | SaveGoldParams
+    | DiplomaticActionParams
+    | PeaceParams
+    | AllianceParams
+    | NoDiplomacyParams
 )
 
 PARAMS_FOR_KIND: dict[ActionKind, type] = {
@@ -379,6 +414,10 @@ PARAMS_FOR_KIND: dict[ActionKind, type] = {
     ActionKind.UPGRADE_UNIT: UpgradeParams,
     ActionKind.PURCHASE_ITEM: PurchaseParams,
     ActionKind.SAVE_GOLD: SaveGoldParams,
+    ActionKind.DIPLOMATIC_ACTION: DiplomaticActionParams,
+    ActionKind.PROPOSE_PEACE: PeaceParams,
+    ActionKind.FORM_ALLIANCE: AllianceParams,
+    ActionKind.NO_DIPLOMACY: NoDiplomacyParams,
 }
 
 
@@ -488,6 +527,16 @@ def candidate_id_for(kind: ActionKind, params: ActionParams) -> str:
             return f"purchase:{c}:{t}:{n}"
         case ActionKind.SAVE_GOLD, SaveGoldParams():
             return "save_gold"
+        case ActionKind.DIPLOMATIC_ACTION, DiplomaticActionParams(
+            player_id=p, action=a
+        ):
+            return f"diplo:{p}:{a}"
+        case ActionKind.PROPOSE_PEACE, PeaceParams(player_id=p):
+            return f"peace:{p}"
+        case ActionKind.FORM_ALLIANCE, AllianceParams(player_id=p, alliance_type=t):
+            return f"alliance:{p}:{t}"
+        case ActionKind.NO_DIPLOMACY, NoDiplomacyParams():
+            return "no_diplomacy"
     raise TypeError(f"{kind} does not accept {type(params).__name__}")
 
 

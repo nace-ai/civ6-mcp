@@ -293,6 +293,8 @@ class LiveObserver:
                     wonder_types=sorted(wonders),
                     treasury=core.overview.gold,
                 )
+            case DecisionCategory.FOREIGN_POLICY:
+                return DecisionInputs(civs=await gs.get_diplomacy())
             case DecisionCategory.RELIGION | DecisionCategory.BELIEF:
                 return DecisionInputs(religion=await gs.get_religion_founding_status())
             case DecisionCategory.GREAT_PERSON:
