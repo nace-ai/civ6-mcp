@@ -96,3 +96,19 @@ def test_blocking_types_query_and_parser():
         ["BT|ENDTURN_BLOCKING_UNITS|1", "BT|NO_ENDTURN_BLOCKING|0", "noise"]
     )
     assert parsed == {"ENDTURN_BLOCKING_UNITS": 1, "NO_ENDTURN_BLOCKING": 0}
+
+
+def test_only_types_this_game_lacks_remain_phase_later():
+    from civ_mcp.drex.scheduler import (
+        HOUSEKEEPING_BLOCKERS,
+        PHASE_LATER_BLOCKERS,
+        SUPPORTED_BLOCKERS,
+    )
+
+    assert PHASE_LATER_BLOCKERS == {
+        "ENDTURN_BLOCKING_EMERGENCY_NEEDS_ATTENTION",
+        "ENDTURN_BLOCKING_WORLD_CONGRESS_SESSION",
+        "ENDTURN_BLOCKING_WORLD_CONGRESS_SPECIAL_SESSION",
+    }
+    # every type the live Base-ruleset dump holds is decided or housekeeping
+    assert _names() <= SUPPORTED_BLOCKERS | HOUSEKEEPING_BLOCKERS
