@@ -116,6 +116,8 @@ class DecisionInputs:
     trade_status: lq.TradeRouteStatus | None = None
     trade_destinations: list[lq.TradeDestination] | None = None
     pantheon: lq.PantheonStatus | None = None
+    # Phase 4 prompts
+    captured_city: Any = None  # lua.drex_queries.CapturedCity
 
 
 @dataclass

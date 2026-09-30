@@ -84,6 +84,7 @@ class FakeGame:
         self.placements: dict[int, dict] = {}
         self.trade_status = fx.trade_status(capacity=0, active=0)
         self.trade_destinations: list = []
+        self.captured = None  # Phase 4: pending captured/rebelled city
         # blockers the fake keeps raising even after the matching action
         self.sticky_blockers: set[str] = set()
         self.fail: dict[str, tuple[Exception, bool]] = {}
@@ -326,6 +327,11 @@ class FakeGame:
         self.query_counts["get_city_attack_targets"] += 1
         self.conn.roundtrips += 1
         return [copy.deepcopy(t) for t in self.city_targets.get(city_id, [])]
+
+    async def get_captured_city(self):
+        self.query_counts["get_captured_city"] += 1
+        self.conn.roundtrips += 1
+        return copy.deepcopy(self.captured)
 
     async def get_religion_founding_status(self):
         self.query_counts["get_religion_founding_status"] += 1
@@ -576,6 +582,26 @@ class FakeGame:
         ]
         self._after(fail)
         return f"CITY_RANGE_ATTACK|Roma -> UNIT_WARRIOR@{target_x},{target_y}|pre_hp:80/100"
+
+    async def resolve_city_capture(self, action):
+        fail = self._record("resolve_city_capture", action)
+        if self.captured is None:
+            return (
+                "Error: NO_PENDING_CITY|No rebelled or captured city pending decision"
+            )
+        if action not in self.captured.options:
+            return (
+                f"Error: CANNOT_{action.upper()}|Cannot {action} {self.captured.name}"
+            )
+        name, cid = self.captured.name, self.captured.city_id
+        self.captured = None
+        from civ_mcp.drex.scheduler import CAPTURED_CITY_BLOCKERS
+
+        self.extra_blockers = [
+            b for b in self.extra_blockers if b[0] not in CAPTURED_CITY_BLOCKERS
+        ]
+        self._after(fail)
+        return f"{action.upper()}|{name} (pop 4, id:{cid}, captured)"
 
     async def found_religion(self, religion_type, follower_belief, founder_belief):
         fail = self._record(

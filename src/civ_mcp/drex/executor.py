@@ -33,6 +33,7 @@ from civ_mcp.drex.candidates import (
     AttackParams,
     BeliefParams,
     Candidate,
+    CapturedCityParams,
     CityAttackParams,
     CivicParams,
     DealParams,
@@ -188,6 +189,8 @@ def dispatch_call(candidate: Candidate) -> DispatchCall:
             return DispatchCall(
                 "make_trade_route", (p.unit.unit_index, p.target_x, p.target_y)
             )
+        case ActionKind.RESOLVE_CAPTURED_CITY, CapturedCityParams():
+            return DispatchCall("resolve_city_capture", (p.action,))
         case (
             (
                 ActionKind.WAIT_GREAT_PERSON
@@ -552,6 +555,17 @@ class Executor:
                 )
                 if not any((d.x, d.y) == (p.target_x, p.target_y) for d in dests):
                     return _no("destination_not_available")
+                return _ok()
+
+            case ActionKind.RESOLVE_CAPTURED_CITY:
+                known = self._known.captured_city if self._known is not None else None
+                city = known if known is not None else await gs.get_captured_city()
+                if city is None:
+                    return _no("no_city_pending")
+                if city.city_id != p.city_id:
+                    return _no("different_city_pending")
+                if p.action not in city.options:
+                    return _no("action_not_available")
                 return _ok()
 
             case ActionKind.CITY_ATTACK:
@@ -920,6 +934,20 @@ class Executor:
                 if await self._poll(routed):
                     return confirmed("trade_route_observed")
                 return self._unconfirmed(raw, "trade_route_not_observed")
+
+            case ActionKind.RESOLVE_CAPTURED_CITY:
+                if raw.startswith(f"{p.action.upper()}|"):
+                    return confirmed("capture_resolved_from_dispatch")
+                if _game_error(raw):
+                    return self._unconfirmed(raw, "capture_refused")
+
+                async def city_gone():
+                    city = await gs.get_captured_city()
+                    return city is None or city.city_id != p.city_id
+
+                if await self._poll(city_gone):
+                    return confirmed("captured_city_no_longer_pending")
+                return self._unconfirmed(raw, "capture_not_observed")
 
             case ActionKind.CITY_ATTACK:
                 if raw.startswith(("CITY_RANGE_ATTACK|", "OK:CITY_RANGE_ATTACK|")):

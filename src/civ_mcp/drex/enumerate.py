@@ -16,6 +16,7 @@ from civ_mcp.drex.candidates import (
     AttackParams,
     BeliefParams,
     Candidate,
+    CapturedCityParams,
     CityAttackParams,
     CivicParams,
     DealParams,
@@ -706,6 +707,38 @@ def city_attack_candidates(city: lq.CityInfo, targets: list[Any]) -> list[Candid
         )
     )
     return out
+
+
+_CAPTURE_LABELS = {
+    "keep": "Keep {name} as our city",
+    "raze": "Raze {name} (burn it down over the coming turns)",
+    "liberate_founder": "Liberate {name}: return it to its founder{orig}",
+    "liberate_previous": "Liberate {name}: return it to its previous owner{prev}",
+    "reject": "Reject {name} (refuse to take the city)",
+}
+
+
+def captured_city_candidates(city: Any) -> list[Candidate]:
+    """One candidate per directive the engine accepts for the pending city
+    (lua.drex_queries.CapturedCity.options), in canonical order."""
+    orig = f" ({city.original_owner})" if city.original_owner else ""
+    prev = f" ({city.previous_owner})" if city.previous_owner else ""
+    return [
+        Candidate.create(
+            ActionKind.RESOLVE_CAPTURED_CITY,
+            CapturedCityParams(city.city_id, city.name, action),
+            label=_CAPTURE_LABELS[action].format(name=city.name, orig=orig, prev=prev),
+            facts={
+                "population": city.population,
+                "districts": city.districts,
+                "source": city.source,
+                "founder": city.original_owner or None,
+                "previous_owner": city.previous_owner or None,
+            },
+        )
+        for action in city.options
+        if action in _CAPTURE_LABELS
+    ]
 
 
 def trade_route_candidates(

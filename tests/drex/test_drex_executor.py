@@ -15,6 +15,7 @@ from civ_mcp.drex.candidates import (
 )
 from civ_mcp.drex.enumerate import (
     belief_candidates,
+    captured_city_candidates,
     city_attack_candidates,
     civic_candidates,
     deal_candidates,
@@ -301,6 +302,18 @@ DISPATCH_CASES.append(
 )
 
 
+DISPATCH_CASES.append(
+    (
+        _cand(
+            captured_city_candidates(fx.captured_city()),
+            ActionKind.RESOLVE_CAPTURED_CITY,
+            lambda c: c.params.action == "raze",
+        ),
+        ("resolve_city_capture", ("raze",)),
+    )
+)
+
+
 @pytest.mark.parametrize(
     "cand,expected", DISPATCH_CASES, ids=[c.candidate_id for c, _ in DISPATCH_CASES]
 )
@@ -346,6 +359,7 @@ def test_executor_performs_the_mapped_call_and_confirms_or_acknowledges(cand, ex
     game.spaces[fx.TRADER_IDX] = fx.trader_space()
     game.trade_status = fx.trade_status(2, 0)
     game.trade_destinations = fx.trade_destinations()
+    game.captured = fx.captured_city()
     outcome = _run(game, cand)
     assert game.calls == [expected]
     assert outcome.dispatched is True

@@ -319,3 +319,97 @@ def parse_placement_batch(
         found.sort(key=lambda pl: (-pl.score, pl.x, pl.y))
         placements[item] = found
     return placements, errors
+
+
+# --------------------------------------------------------------- Phase 4 prompts
+
+CAPTURE_ACTIONS = ("keep", "raze", "liberate_founder", "liberate_previous", "reject")
+_CAPTURE_DIRECTIVES = {
+    "keep": "KEEP",
+    "raze": "RAZE",
+    "liberate_founder": "LIBERATE_FOUNDER",
+    "liberate_previous": "LIBERATE_PREVIOUS_OWNER",
+    "reject": "REJECT",
+}
+
+_LUA_CIV_NAME = """
+local function civName(pid)
+  if pid == nil or pid < 0 then return "" end
+  local cfg = PlayerConfigurations[pid]
+  if cfg == nil then return "" end
+  local ok, s = pcall(function() return Locale.Lookup(cfg:GetCivilizationShortDescription()) end)
+  return (ok and s) or ""
+end
+"""
+
+
+@dataclass
+class CapturedCity:
+    """The city the engine wants a keep/raze/liberate decision for."""
+
+    city_id: int
+    name: str
+    x: int
+    y: int
+    population: int
+    districts: int
+    source: str  # "captured" (conquest) or "rebelled" (loyalty flip)
+    original_owner: str  # civ short name, "" if unknown
+    previous_owner: str
+    options: list[str]  # subset of CAPTURE_ACTIONS the engine allows right now
+
+
+def build_captured_city_query() -> str:
+    """InGame: the pending captured/rebelled city and the directives the
+    engine accepts for it (the same ``CanStartCommand`` checks RazeCity.lua
+    makes before showing each button)."""
+    checks = "\n".join(
+        f"do local p = {{}} p[UnitOperationTypes.PARAM_FLAGS] = CityDestroyDirectives.{d}\n"
+        f"  local ok, can = pcall(function() return CityManager.CanStartCommand(city, CityCommandTypes.DESTROY, p) end)\n"
+        f'  if ok and can then print("OPTION|{a}") end end'
+        for a, d in _CAPTURE_DIRECTIVES.items()
+    )
+    return f"""
+local me = Game.GetLocalPlayer()
+local player = Players[me]
+local city = player:GetCities():GetNextRebelledCity()
+local source = "rebelled"
+if city == nil then city = player:GetCities():GetNextCapturedCity() source = "captured" end
+if city == nil then print("NO_PENDING_CITY"); print("{SENTINEL}"); return end
+{_LUA_CIV_NAME}
+local orig, prev, nd = -1, -1, 0
+pcall(function() orig = city:GetOriginalOwner() end)
+pcall(function() prev = city:GetOwnerBeforeOccupation() end)
+pcall(function() nd = city:GetDistricts():GetNumZonedDistrictsRequiringPopulation() end)
+print("CAPTURED|" .. (city:GetID() + me * 65536) .. "|" .. Locale.Lookup(city:GetName()) .. "|" .. city:GetX() .. "|" .. city:GetY() .. "|" .. city:GetPopulation() .. "|" .. nd .. "|" .. source .. "|" .. civName(orig) .. "|" .. civName(prev))
+{checks}
+print("{SENTINEL}")
+"""
+
+
+def parse_captured_city(lines: list[str]) -> CapturedCity | None:
+    city: CapturedCity | None = None
+    offered: set[str] = set()
+    for line in lines:
+        if line.startswith("CAPTURED|"):
+            p = line.split("|")
+            if len(p) < 10:
+                continue
+            city = CapturedCity(
+                int(p[1]),
+                p[2],
+                int(p[3]),
+                int(p[4]),
+                int(p[5]),
+                int(p[6]),
+                p[7],
+                p[8],
+                p[9],
+                [],
+            )
+        elif line.startswith("OPTION|"):
+            offered.add(line.split("|", 1)[1].strip())
+    if city is None:
+        return None
+    city.options = [a for a in CAPTURE_ACTIONS if a in offered]
+    return city

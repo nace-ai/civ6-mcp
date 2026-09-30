@@ -202,6 +202,12 @@ class GameState:
         )
         return lq_drex.parse_city_attack_targets(lines)
 
+    async def get_captured_city(self) -> lq_drex.CapturedCity | None:
+        """InGame: the captured/rebelled city awaiting keep/raze/liberate, with
+        the directives the engine accepts; None when nothing is pending."""
+        lines = await self.conn.execute_write(lq_drex.build_captured_city_query())
+        return lq_drex.parse_captured_city(lines)
+
     async def add_belief(self, belief_type: str) -> str:
         """InGame: add a belief to our religion."""
         lines = await self.conn.execute_write(lq_drex.build_add_belief(belief_type))

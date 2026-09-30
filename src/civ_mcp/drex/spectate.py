@@ -19,6 +19,7 @@ from civ_mcp.drex.candidates import (
     ActionKind,
     AttackParams,
     Candidate,
+    CapturedCityParams,
     ImproveParams,
     MoveParams,
     ProductionParams,
@@ -157,6 +158,11 @@ def focus_point(
         case ActionKind.IMPROVE_TILE, ImproveParams():
             return p.unit.x, p.unit.y, candidate.label
         case ActionKind.SET_PRODUCTION, ProductionParams():
+            city = core.city(p.city_id)
+            if city is None:
+                return None
+            return city.x, city.y, candidate.label
+        case ActionKind.RESOLVE_CAPTURED_CITY, CapturedCityParams():
             city = core.city(p.city_id)
             if city is None:
                 return None

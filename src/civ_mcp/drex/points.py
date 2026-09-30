@@ -14,6 +14,7 @@ from civ_mcp.drex.candidates import (
 )
 from civ_mcp.drex.enumerate import (
     belief_candidates,
+    captured_city_candidates,
     city_attack_candidates,
     civic_candidates,
     deal_candidates,
@@ -60,6 +61,7 @@ QUESTIONS: dict[DecisionCategory, str] = {
     DecisionCategory.RELIGION: "Which choice should the empire make to found its religion?",
     DecisionCategory.BELIEF: "Which belief should the empire add to its religion?",
     DecisionCategory.CITY_ATTACK: "Should this city fire its ranged attack, and at whom?",
+    DecisionCategory.CAPTURED_CITY: "What should the empire do with this captured city?",
 }
 
 
@@ -169,6 +171,8 @@ def _enumerate(
             entity,
             inputs,
         )
+    if cat is DecisionCategory.CAPTURED_CITY and inputs.captured_city is not None:
+        return captured_city_candidates(inputs.captured_city), [], entity, inputs
     return [], [Exclusion(entity, f"no inputs for {cat}")], entity, inputs
 
 

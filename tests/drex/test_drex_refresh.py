@@ -61,3 +61,9 @@ def test_refresh_replaces_only_requested_parts_and_bumps_version():
     assert fresh.units[0].moves_remaining == 0
     assert fresh.cities[0].population == core.cities[0].population  # not refreshed
     assert game.query_counts["get_units"] == 2
+
+
+def test_captured_city_refreshes_cities_units_overview():
+    assert refresh_parts(ActionKind.RESOLVE_CAPTURED_CITY) == frozenset(
+        {"cities", "units", "overview", "blockers", "popup"}
+    )

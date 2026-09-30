@@ -637,3 +637,20 @@ def trade_destinations():
             "Kabul", "Kabul", 14, 12, False, is_city_state=True, has_quest=True
         ),
     ]
+
+
+def captured_city(options=("keep", "raze", "liberate_founder")):
+    from civ_mcp.lua.drex_queries import CapturedCity
+
+    return CapturedCity(
+        city_id=65540,
+        name="Antium",
+        x=14,
+        y=9,
+        population=4,
+        districts=1,
+        source="captured",
+        original_owner="Greece",
+        previous_owner="Greece",
+        options=list(options),
+    )

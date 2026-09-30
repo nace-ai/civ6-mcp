@@ -31,6 +31,7 @@ from civ_mcp.drex.observation import (
 SCHEDULER_ORDER = (
     "diplomacy: open sessions, ascending player id",
     "deal: pending incoming deals, ascending player id",
+    "captured_city: when CONSIDER_RAZE_CITY / CONSIDER_DISLOYAL_CITY blocks (keep, raze, liberate, reject)",
     "government: when CONSIDER_GOVERNMENT_CHANGE blocks",
     "policy: when FILL_CIVIC_SLOT blocks, lowest empty slot",
     "envoy: when GIVE_INFLUENCE_TOKEN blocks",
@@ -68,6 +69,18 @@ GOVERNOR_BLOCKERS = frozenset(
         "ENDTURN_BLOCKING_GOVERNOR_PROMOTION",
     }
 )
+CAPTURED_CITY_BLOCKERS = frozenset(
+    {
+        "ENDTURN_BLOCKING_CONSIDER_RAZE_CITY",
+        "ENDTURN_BLOCKING_CONSIDER_DISLOYAL_CITY",
+    }
+)
+# Modal prompts: decided first, repeat while the blocker stands (bounded), and
+# a blocker that stands once nothing is pending is dismissed as housekeeping.
+PROMPT_BLOCKERS: tuple[tuple[frozenset[str], DecisionCategory], ...] = (
+    (CAPTURED_CITY_BLOCKERS, DecisionCategory.CAPTURED_CITY),
+)
+PROMPT_CATEGORIES = frozenset(c for _, c in PROMPT_BLOCKERS)
 
 SUPPORTED_BLOCKERS = frozenset(
     {
@@ -88,6 +101,7 @@ SUPPORTED_BLOCKERS = frozenset(
         RELIGION_BLOCKER,
         BELIEF_BLOCKER,
         *CITY_ATTACK_BLOCKERS,
+        *CAPTURED_CITY_BLOCKERS,
     }
 )
 # Informational blockers that execute_end_turn clears and logs as housekeeping.
@@ -99,8 +113,6 @@ HOUSEKEEPING_BLOCKERS = frozenset({"ENDTURN_BLOCKING_WORLD_CONGRESS_LOOK"})
 # classified.
 PHASE_LATER_BLOCKERS = frozenset(
     {
-        "ENDTURN_BLOCKING_CONSIDER_RAZE_CITY",
-        "ENDTURN_BLOCKING_CONSIDER_DISLOYAL_CITY",
         "ENDTURN_BLOCKING_SPY_CHOOSE_ESCAPE_ROUTE",
         "ENDTURN_BLOCKING_SPY_CHOOSE_DRAGNET_PRIORITY",
         "ENDTURN_BLOCKING_ARTIFACT",
@@ -156,6 +168,7 @@ def key_for(spec: DecisionSpec) -> str:
         DecisionCategory.GREAT_PERSON,
         DecisionCategory.RELIGION,
         DecisionCategory.BELIEF,
+        *PROMPT_CATEGORIES,
     ):
         return str(spec.category)
     return f"{spec.category}:{spec.entity_id}"
@@ -222,6 +235,8 @@ class Scheduler:
                 return 6  # two stored steps + found, with room to re-pick once
             case DecisionCategory.DEDICATION:
                 return 3  # Heroic Ages allow up to three dedications
+        if spec.category in PROMPT_CATEGORIES:
+            return 4  # a second captured city the same turn; never unbounded
         return None
 
     def _open(self, ledger: TurnLedger, spec: DecisionSpec) -> bool:
@@ -284,6 +299,10 @@ class Scheduler:
             )
         ):
             stale.extend(sorted(attack))
+        for group, category in PROMPT_BLOCKERS:
+            standing = blockers & group
+            if standing and not self._open(ledger, DecisionSpec(category, "empire")):
+                stale.extend(sorted(standing))
         return [b for b in stale if b not in ledger.dismissed_blockers]
 
     def unsupported_blockers(self, core: CoreObservation) -> list[str]:
@@ -338,6 +357,12 @@ class Scheduler:
         if ledger.budget_hit:
             return EndTurn()
         blockers = core.blocker_types()
+        for group, category in PROMPT_BLOCKERS:
+            if blockers & group:
+                spec = DecisionSpec(category, "empire")
+                if self._open(ledger, spec):
+                    return spec
+
         for blocker, category in (
             (GOVERNMENT_BLOCKER, DecisionCategory.GOVERNMENT),
             (POLICY_BLOCKER, DecisionCategory.POLICY),
@@ -468,6 +493,7 @@ class Scheduler:
             DecisionCategory.GOVERNOR,
             DecisionCategory.RELIGION,  # resolved by the runner after FOUND_RELIGION
             DecisionCategory.DEDICATION,  # repeats while the blocker stands
+            *PROMPT_CATEGORIES,  # a second prompt of the same kind this turn
         ):
             ledger.resolved.add(key)
 

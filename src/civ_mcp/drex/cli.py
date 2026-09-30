@@ -366,6 +366,7 @@ PROBE_KINDS: dict[str, Callable[[Any], Awaitable[Any]]] = {
     "religion": lambda gs: gs.get_religion_founding_status(),
     "city_attack": _probe_city_attack,
     "blockers": lambda gs: gs.get_end_turn_blocking_types(),
+    "captured_city": lambda gs: gs.get_captured_city(),
 }
 
 

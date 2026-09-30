@@ -46,6 +46,7 @@ _TABLE: dict[ActionKind, frozenset[str]] = {
     ActionKind.CITY_ATTACK: frozenset({"units"}),
     ActionKind.HOLD_FIRE: frozenset(),
     ActionKind.MAKE_TRADE_ROUTE: frozenset({"units", "overview"}),
+    ActionKind.RESOLVE_CAPTURED_CITY: frozenset({"cities", "units", "overview"}),
 }
 
 

@@ -277,6 +277,8 @@ class LiveObserver:
                     city_attack_city=city,
                     city_targets=await gs.get_city_attack_targets(city.city_id),
                 )
+            case DecisionCategory.CAPTURED_CITY:
+                return DecisionInputs(captured_city=await gs.get_captured_city())
             case DecisionCategory.RELIGION | DecisionCategory.BELIEF:
                 return DecisionInputs(religion=await gs.get_religion_founding_status())
             case DecisionCategory.GREAT_PERSON:
