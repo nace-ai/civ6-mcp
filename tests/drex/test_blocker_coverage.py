@@ -38,7 +38,7 @@ def test_every_engine_blocker_type_is_classified():
     assert not (SUPPORTED_BLOCKERS & HOUSEKEEPING_BLOCKERS)
 
 
-def test_fixture_matches_the_game_sources_list():
+def test_live_fixture_holds_no_unknown_types_and_sources_list_is_classified():
     expected = {
         "UNITS",
         "UNIT_NEEDS_ORDERS",
@@ -72,7 +72,21 @@ def test_fixture_matches_the_game_sources_list():
         "WORLD_CONGRESS_LOOK",
     }
     names = {n.removeprefix("ENDTURN_BLOCKING_") for n in _names()}
-    assert expected <= names, sorted(expected - names)
+    # The live dump is the Base ruleset (21 types); every live type must be one
+    # the classification knows, and every known type must be classified.
+    unknown = sorted(names - expected)
+    assert unknown == [], unknown
+    from civ_mcp.drex.scheduler import (
+        HOUSEKEEPING_BLOCKERS,
+        PHASE_LATER_BLOCKERS,
+        SUPPORTED_BLOCKERS,
+    )
+
+    classified = {
+        n.removeprefix("ENDTURN_BLOCKING_")
+        for n in SUPPORTED_BLOCKERS | HOUSEKEEPING_BLOCKERS | PHASE_LATER_BLOCKERS
+    }
+    assert expected <= classified, sorted(expected - classified)
 
 
 def test_blocking_types_query_and_parser():
