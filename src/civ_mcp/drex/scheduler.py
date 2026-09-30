@@ -171,6 +171,7 @@ class TurnLedger:
     # re-opened for it once (a blocker raised mid-turn is decided, not dismissed)
     attack_reopened: bool = False
     purchase_offered: bool = False
+    hang_relaunches: int = 0  # AI-turn hang relaunches this turn (bounded to one)
     # prompt entities already decided this turn (candidate-id prefixes such as
     # "captured:65540:"); while the engine still lists them they are not
     # offered again, so one city is never kept and razed in the same turn

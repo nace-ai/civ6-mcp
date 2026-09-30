@@ -674,6 +674,41 @@ class Runner:
                         "end_turn_status",
                         {"turn": core.turn, "status": outcome.status},
                     )
+                    if (
+                        outcome.status == "not_advanced"
+                        and self._relaunch is not None
+                        and ledger.hang_relaunches < 1
+                    ):
+                        # Nothing pending and the turn will not advance: the
+                        # engine hung in the AI turn. Relaunch from the autosave
+                        # once for this turn; the loop then re-observes.
+                        ledger.hang_relaunches += 1
+                        try:
+                            result = await self._relaunch()
+                            self.log.write(
+                                "game_relaunch",
+                                {
+                                    "reason": "ai_turn_hang",
+                                    "turn": core.turn,
+                                    "result": result,
+                                },
+                            )
+                        except Exception as le:  # noqa: BLE001 — logged; the run resumes
+                            self.log.write(
+                                "game_relaunch",
+                                {
+                                    "reason": "ai_turn_hang",
+                                    "turn": core.turn,
+                                    "error": f"{type(le).__name__}: {le}",
+                                },
+                            )
+                        if hasattr(self.gs, "_pending_end_turn"):
+                            self.gs._pending_end_turn = False
+                            self.gs._pending_end_turn_from = None
+                        try:
+                            await self.gs.conn.reconnect()
+                        except _IO_ERRORS as re_err:
+                            self._log_io_error(re_err, "reconnect", 0)
                     core = await self._observe()
                     continue
                 core = await self._observe(reactive_from=core if in_flight else None)

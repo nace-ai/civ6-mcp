@@ -235,3 +235,57 @@ def test_errored_identity_section_is_an_incomplete_snapshot(tmp_path):
 
     with pytest.raises(ConnectionError):
         asyncio.run(LiveObserver(Game()).core())
+
+
+def test_ai_turn_hang_relaunches_from_the_autosave_and_continues(tmp_path):
+    """A not_advanced end turn (nothing pending, turn stuck) is an engine hang:
+    the runner relaunches the game once for that turn and carries on."""
+    from civ_mcp.end_turn import EndTurnOutcome
+
+    game = FakeGame()
+    clock = _Clock()
+    real_end_turn = _fake_end_turn(game)
+    hung = []
+
+    async def end_turn(gs):
+        if not hung:
+            hung.append(True)
+            return EndTurnOutcome(status="not_advanced", turn_before=5, turn_after=5)
+        return await real_end_turn(gs)
+
+    relaunched = []
+
+    async def relaunch():
+        relaunched.append(True)
+        return "relaunched"
+
+    runner, slept = _runner(game, tmp_path, clock, relaunch=relaunch)
+    runner._end_turn = end_turn
+    runner.max_loop_iterations = 60
+    result = asyncio.run(runner.run())
+    assert relaunched == [True]
+    assert result.stop_reason == "turn_budget_reached"
+    recs = [r for r in _records(tmp_path) if r["type"] == "game_relaunch"]
+    assert recs and recs[0].get("reason") == "ai_turn_hang"
+
+
+def test_ai_turn_hang_without_a_relaunch_hook_is_logged_and_retried(tmp_path):
+    from civ_mcp.end_turn import EndTurnOutcome
+
+    game = FakeGame()
+    clock = _Clock()
+    real_end_turn = _fake_end_turn(game)
+    calls = []
+
+    async def end_turn(gs):
+        calls.append(True)
+        if len(calls) == 1:
+            return EndTurnOutcome(status="not_advanced", turn_before=5, turn_after=5)
+        return await real_end_turn(gs)
+
+    runner, _ = _runner(game, tmp_path, clock)
+    runner._end_turn = end_turn
+    runner.max_loop_iterations = 60
+    result = asyncio.run(runner.run())
+    assert result.stop_reason == "turn_budget_reached"
+    assert any(r["type"] == "end_turn_status" for r in _records(tmp_path))

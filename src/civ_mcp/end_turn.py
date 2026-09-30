@@ -53,6 +53,9 @@ def _is_consequential(blocking_type: str) -> bool:
 # InGame query per probe is far from the tight loop that hung Games 1-5.
 _EARLY_PROBE_S = 8.0
 _PROBE_EVERY_S = 15.0
+# Decision-only runs stop waiting for a stuck AI turn after this long and let
+# the runner relaunch from the autosave (a live hang cost 25 minutes).
+_HANG_AFTER_S = 240.0
 
 
 def _poll_sleep_s(gs: GameState) -> float:
@@ -1312,6 +1315,8 @@ async def execute_end_turn(gs: GameState) -> str:
             30.0,
             30.0,  # 550s (~9 min)
         ]:
+            if decision_only and cumulative_wait >= _HANG_AFTER_S:
+                break  # hung: fall through to the InGame checks, then report
             await asyncio.sleep(delay)
             cumulative_wait += delay
             turn_after = await _get_turn_number(gs)

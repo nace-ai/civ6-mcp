@@ -395,3 +395,30 @@ def test_decision_only_mode_keeps_probing_while_the_turn_hangs(monkeypatch):
     assert len(early) >= 4, probes  # a dialogue opening at 60 s is seen soon after
     gaps = [b - a for a, b in itertools.pairwise(early)]
     assert all(g >= 10 for g in gaps), probes  # never a tight loop
+
+
+# --------------------------------------------------------------- hang cap
+def _total_wait(monkeypatch, decision_only):
+    import civ_mcp.end_turn as et
+
+    clock = _Clock()
+    monkeypatch.setattr(et.asyncio, "sleep", clock.sleep)
+    conn = ScriptedConn([])  # the turn never advances and nothing is pending
+    gs = _gs(conn, decision_only=decision_only)
+
+    async def no_sessions():
+        return []
+
+    gs.get_diplomacy_sessions = no_sessions
+    asyncio.run(execute_end_turn_typed(gs, decision_only=decision_only))
+    return clock.now
+
+
+def test_decision_only_poll_gives_up_on_a_hung_ai_turn_within_five_minutes(monkeypatch):
+    # Live: an AI-turn hang at T20 cost 25 minutes; the runner relaunches from
+    # the autosave, so waiting the legacy ~9 minutes first only adds delay.
+    assert _total_wait(monkeypatch, decision_only=True) <= 300
+
+
+def test_legacy_poll_keeps_its_long_wait(monkeypatch):
+    assert _total_wait(monkeypatch, decision_only=False) >= 500
