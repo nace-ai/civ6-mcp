@@ -89,6 +89,7 @@ class FakeGame:
         self.spy_escape = None  # Phase 4: caught spy awaiting an escape route
         self.artifact = None  # Phase 4: artifact awaiting a player choice
         self.stacked_units_on_tile: set[str] = set()  # Phase 5: purchases refused
+        self.turn_active = True  # False while the engine processes the AI turn
         # blockers the fake keeps raising even after the matching action
         self.sticky_blockers: set[str] = set()
         self.fail: dict[str, tuple[Exception, bool]] = {}
@@ -142,6 +143,11 @@ class FakeGame:
             space.reachable, space.targets = [], []
 
     # ---------------------------------------------------------------- queries
+    async def is_turn_active(self):
+        self.query_counts["is_turn_active"] += 1
+        self.conn.roundtrips += 1
+        return self.turn_active
+
     async def get_game_identity(self):
         return (self.civ, self.seed)
 

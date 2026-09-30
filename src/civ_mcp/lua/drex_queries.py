@@ -642,3 +642,23 @@ pcall(function() local popup = ContextPtr:LookUpControl("/InGame/ChooseArtifact"
 print("OK:ARTIFACT_CHOSEN|" .. civName(pid))
 print("{SENTINEL}")
 """
+
+
+def build_turn_active_query() -> str:
+    """GameCore: is it the local player's turn (False while the engine runs the
+    AI turn)? GameCore-only, so it is safe to poll while the AI processes."""
+    return f"""
+local me = Game.GetLocalPlayer()
+local ok, active = pcall(function() return Players[me]:IsTurnActive() end)
+print("TURN_ACTIVE|" .. ((ok and active) and "1" or "0"))
+print("{SENTINEL}")
+"""
+
+
+def parse_turn_active(lines: list[str]) -> bool:
+    """True unless the engine explicitly says the turn is not ours (fail open:
+    an unanswered query must not stall the run)."""
+    for line in lines:
+        if line.startswith("TURN_ACTIVE|"):
+            return line.split("|", 1)[1].strip() == "1"
+    return True

@@ -80,6 +80,10 @@ class RunConfig:
     reconnect_backoff_s: float = 1.0
     reconnect_max_backoff_s: float = 30.0
     game_dead_after_s: float = 120.0
+    # Before the first observation (and after a relaunch) wait for our turn:
+    # InGame queries while the engine runs the AI turn can hang it.
+    turn_wait_s: float = 240.0
+    turn_poll_s: float = 2.0
 
 
 @dataclass
@@ -354,6 +358,7 @@ class Runner:
                         try:
                             result = await self._relaunch()
                             self.log.write("game_relaunch", {"result": result})
+                            await self._wait_for_our_turn()
                         except Exception as le:  # noqa: BLE001
                             self.log.write(
                                 "game_relaunch",
@@ -444,7 +449,29 @@ class Runner:
         if where is not None:
             self.spectator.focus(*where)
 
+    async def _wait_for_our_turn(self) -> None:
+        """Poll the GameCore-only turn-active flag until it is our turn (bounded)."""
+        check = getattr(self.gs, "is_turn_active", None)
+        if check is None:
+            return
+        started = self._clock()
+        logged = False
+        while True:
+            if await check():
+                return
+            if not logged:
+                logged = True
+                self.log.write(
+                    "waiting_for_turn",
+                    {"turn_active": False, "max_wait_s": self.cfg.turn_wait_s},
+                )
+            if self._clock() - started >= self.cfg.turn_wait_s:
+                self.log.write("waiting_for_turn", {"timed_out": True})
+                return
+            await self._sleep(self.cfg.turn_poll_s)
+
     async def _run(self) -> RunResult:
+        await self._wait_for_our_turn()
         core = await self._observe()
         identity = core.game_identity
         self.memory.bind_game(identity)
@@ -693,6 +720,7 @@ class Runner:
                                     "result": result,
                                 },
                             )
+                            await self._wait_for_our_turn()
                         except Exception as le:  # noqa: BLE001 — logged; the run resumes
                             self.log.write(
                                 "game_relaunch",

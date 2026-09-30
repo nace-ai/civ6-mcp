@@ -31,6 +31,12 @@ class GameConnection:
     # A round trip used to spend 0.3 s in these two drains alone. The sentinel
     # delimits every response, so the drains only need to catch bytes that are
     # already buffered.
+    # A hung engine keeps the socket open and answers nothing: after this many
+    # consecutive commands without a sentinel the connection raises, which the
+    # runner's dead-game recovery listens for (a silent [] never reached it).
+    MAX_CONSECUTIVE_TIMEOUTS = 3
+    HANDSHAKE_TIMEOUT_S = 10.0
+    _timeout_streak = 0
     PRE_DRAIN_S = 0.01
     POST_DRAIN_S = 0.02
     # After a command timed out without its sentinel, its late output is still
@@ -84,9 +90,22 @@ class GameConnection:
                 f"Cannot connect to Civ 6 at {self.host}:{self.port}. "
                 "Is the game running with EnableTuner=1?"
             ) from e
-        app_identity, raw_states = await tuner_client.handshake(
-            self._reader, self._writer
-        )
+        try:
+            app_identity, raw_states = await asyncio.wait_for(
+                tuner_client.handshake(self._reader, self._writer),
+                timeout=self.HANDSHAKE_TIMEOUT_S,
+            )
+        except asyncio.TimeoutError as e:
+            try:
+                if self._writer is not None:
+                    self._writer.close()
+            except Exception:  # noqa: BLE001 — best-effort close of a hung socket
+                pass
+            self._reader = self._writer = None
+            raise ConnectionError(
+                f"Civ 6 tuner accepted the connection but did not complete the "
+                f"handshake within {self.HANDSHAKE_TIMEOUT_S:.0f}s (engine hung?)"
+            ) from e
         log.info("Connected: %s", app_identity)
 
         # Parse state list: alternating [index_number, state_name] pairs
@@ -195,10 +214,21 @@ class GameConnection:
         loop = asyncio.get_running_loop()
         t0 = loop.time()
         try:
-            return await self._locked_execute_inner(state_index, lua_code, timeout)
+            lines = await self._locked_execute_inner(state_index, lua_code, timeout)
         finally:
             self.roundtrips += 1
             self.roundtrip_ms += (loop.time() - t0) * 1000.0
+        if self.dirty:
+            self._timeout_streak += 1
+            if self._timeout_streak >= self.MAX_CONSECUTIVE_TIMEOUTS:
+                self._timeout_streak = 0
+                raise ConnectionError(
+                    f"Civ 6 tuner unresponsive: {self.MAX_CONSECUTIVE_TIMEOUTS} "
+                    "consecutive commands timed out (engine hung?)"
+                )
+        else:
+            self._timeout_streak = 0
+        return lines
 
     async def _locked_execute_inner(
         self, state_index: int, lua_code: str, timeout: float

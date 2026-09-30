@@ -289,3 +289,37 @@ def test_ai_turn_hang_without_a_relaunch_hook_is_logged_and_retried(tmp_path):
     result = asyncio.run(runner.run())
     assert result.stop_reason == "turn_budget_reached"
     assert any(r["type"] == "end_turn_status" for r in _records(tmp_path))
+
+
+def test_runner_waits_for_our_turn_before_observing(tmp_path):
+    """Live: a run started while the engine was still processing the AI turn
+    issued InGame queries into it and the game hung. The runner now polls a
+    GameCore-only turn-active check first."""
+    game = FakeGame()
+    game.turn_active = False
+    clock = _Clock()
+    order = []
+    orig_cities = game.get_cities
+
+    async def get_cities():
+        order.append("observe")
+        return await orig_cities()
+
+    game.get_cities = get_cities
+    orig_active = game.is_turn_active
+
+    async def is_turn_active():
+        order.append("active?")
+        if len([o for o in order if o == "active?"]) >= 3:
+            game.turn_active = True
+        return await orig_active()
+
+    game.is_turn_active = is_turn_active
+    runner, _ = _runner(game, tmp_path, clock)
+    runner.max_loop_iterations = 40
+    result = asyncio.run(runner.run())
+    assert result.stop_reason == "turn_budget_reached"
+    assert order.index("observe") > order.index("active?")
+    assert order[:3] == ["active?", "active?", "active?"]
+    recs = [r for r in _records(tmp_path) if r["type"] == "waiting_for_turn"]
+    assert recs and recs[0]["turn_active"] is False

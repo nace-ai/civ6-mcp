@@ -202,6 +202,11 @@ class GameState:
         )
         return lq_drex.parse_city_attack_targets(lines)
 
+    async def is_turn_active(self) -> bool:
+        """GameCore: False while the engine processes the AI turn."""
+        lines = await self.conn.execute_read(lq_drex.build_turn_active_query())
+        return lq_drex.parse_turn_active(lines)
+
     async def get_captured_city(self) -> lq_drex.CapturedCity | None:
         """InGame: the captured/rebelled city awaiting keep/raze/liberate, with
         the directives the engine accepts; None when nothing is pending."""
