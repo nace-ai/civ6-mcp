@@ -53,7 +53,17 @@ _NONCRITICAL_POPUPS = [
     "RockBandPopup",
     "RockBandMoviePopup",
     "NaturalDisasterPopup",
+    # the tutorial advisor ("OK" dialog a human clicks away); its root may be a
+    # child of InGame or a top-level context, so both paths are checked
+    "TutorialUIRoot/AdvisorPopup",
+    "/TutorialUIRoot/AdvisorPopup",
 ]
+
+
+def _ctx_path(name: str) -> str:
+    """Context path for a popup name: absolute names are used verbatim."""
+    return name if name.startswith("/") else f"/InGame/{name}"
+
 
 # Critical screens — pause both camera and popup watcher while visible.
 _CRITICAL_SCREENS = [
@@ -71,7 +81,7 @@ POPUP_STATUS_LUA = (
     )
     + "if r=='CLEAR' then "
     + "".join(
-        f"do local c=ContextPtr:LookUpControl('/InGame/{n}') "
+        f"do local c=ContextPtr:LookUpControl('{_ctx_path(n)}') "
         f"if c and not c:IsHidden() then r='POPUP' end end "
         for n in _NONCRITICAL_POPUPS
     )

@@ -1,6 +1,7 @@
 """End-turn: opt-in decision-only mode and the typed outcome path."""
 
 import asyncio
+import itertools
 
 from civ_mcp.end_turn import execute_end_turn, execute_end_turn_typed
 from civ_mcp.game_state import GameState
@@ -327,3 +328,70 @@ def test_recovery_poll_sleep_is_short_only_in_decision_only_mode():
     conn = ScriptedConn([])
     assert _poll_sleep_s(_gs(conn, decision_only=True)) == 0.5
     assert _poll_sleep_s(_gs(conn, decision_only=False)) == 2.0
+
+
+# ----------------------------------------------------- leader dialogue latency
+class _Clock:
+    """Simulated asyncio.sleep: accumulates the seconds the poll waited."""
+
+    def __init__(self):
+        self.now = 0.0
+
+    async def sleep(self, delay):
+        self.now += delay
+
+
+def _first_probe_time(monkeypatch, decision_only):
+    import drex_fixtures as fx
+
+    import civ_mcp.end_turn as et
+
+    clock = _Clock()
+    monkeypatch.setattr(et.asyncio, "sleep", clock.sleep)
+    conn = ScriptedConn([])  # the turn never advances: a leader is talking
+    gs = _gs(conn, decision_only=decision_only)
+    seen = []
+
+    async def sessions():
+        # the pre-end-turn check sees nothing; the leader appears once the
+        # end turn request is in flight
+        if not conn.ran(END_TURN):
+            return []
+        seen.append(clock.now)
+        return [fx.session(dialogue_text="Greetings from Egypt.")]
+
+    gs.get_diplomacy_sessions = sessions
+    asyncio.run(execute_end_turn(gs))
+    return seen[0]
+
+
+def test_decision_only_mode_notices_a_leader_dialogue_within_ten_seconds(monkeypatch):
+    # Live: an AI proposal during the AI turn paused the run for 55 s because
+    # the poll asked about diplomacy only after 45 s of silence.
+    assert _first_probe_time(monkeypatch, decision_only=True) <= 10.0
+
+
+def test_legacy_mode_keeps_the_single_late_probe(monkeypatch):
+    assert _first_probe_time(monkeypatch, decision_only=False) >= 45.0
+
+
+def test_decision_only_mode_keeps_probing_while_the_turn_hangs(monkeypatch):
+    import civ_mcp.end_turn as et
+
+    clock = _Clock()
+    monkeypatch.setattr(et.asyncio, "sleep", clock.sleep)
+    conn = ScriptedConn([])
+    gs = _gs(conn, decision_only=True)
+    probes = []
+
+    async def sessions():
+        if conn.ran(END_TURN):
+            probes.append(clock.now)
+        return []
+
+    gs.get_diplomacy_sessions = sessions
+    asyncio.run(execute_end_turn(gs))
+    early = [t for t in probes if t <= 120]
+    assert len(early) >= 4, probes  # a dialogue opening at 60 s is seen soon after
+    gaps = [b - a for a, b in itertools.pairwise(early)]
+    assert all(g >= 10 for g in gaps), probes  # never a tight loop

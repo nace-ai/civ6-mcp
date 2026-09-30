@@ -39,11 +39,15 @@ async def dismiss_popup(conn: GameConnection) -> str:
         "GreatWorkShowcase",
         "WorldCongressPopup",
         "WorldCongressIntro",
+        # tutorial advisor dialog (see spectator._NONCRITICAL_POPUPS)
+        "TutorialUIRoot/AdvisorPopup",
+        "/TutorialUIRoot/AdvisorPopup",
     ]
     checks = []
     for name in popup_names:
+        path = name if name.startswith("/") else f"/InGame/{name}"
         checks.append(
-            f'do local c = ContextPtr:LookUpControl("/InGame/{name}") '
+            f'do local c = ContextPtr:LookUpControl("{path}") '
             f"if c and not c:IsHidden() then "
             f"  pcall(function() UIManager:DequeuePopup(c) end) "
             f"  pcall(function() Input.PopContext() end) "

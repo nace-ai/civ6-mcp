@@ -48,6 +48,13 @@ def _is_consequential(blocking_type: str) -> bool:
     )
 
 
+# Decision-only mid-turn diplomacy probe: first after this many seconds of
+# waiting, then every _PROBE_EVERY_S while the turn has not advanced. One
+# InGame query per probe is far from the tight loop that hung Games 1-5.
+_EARLY_PROBE_S = 8.0
+_PROBE_EVERY_S = 15.0
+
+
 def _poll_sleep_s(gs: GameState) -> float:
     """Recovery polling sleep: short in decision-only mode, the legacy 2 s
     otherwise (the MCP path keeps its original timing)."""
@@ -1266,7 +1273,11 @@ async def execute_end_turn(gs: GameState) -> str:
     if not advanced:
         # 10 min total: AI can take several minutes on large maps with wars.
         # Quick polls early (catch fast turns), then escalate to 30s intervals.
-        diplomacy_probed = False
+        # Decision-only runs probe early and keep probing on a slow cadence: a
+        # leader dialogue during the AI turn otherwise costs ~50 s of silence.
+        # The legacy MCP path keeps its single probe at 45 s.
+        decision_only = _decision_only(gs)
+        next_probe_at = _EARLY_PROBE_S if decision_only else 45.0
         cumulative_wait = 4.0  # Phase 1 already waited ~4s
         for delay in [
             2.0,
@@ -1341,8 +1352,10 @@ async def execute_end_turn(gs: GameState) -> str:
             # queries in a tight loop. A single probe after 45s is safe: if
             # the AI paused for a trade deal, the game is idle. If the AI is
             # still processing, the query may be slow/fail (caught below).
-            if not diplomacy_probed and cumulative_wait >= 45:
-                diplomacy_probed = True
+            if cumulative_wait >= next_probe_at:
+                next_probe_at = (
+                    cumulative_wait + _PROBE_EVERY_S if decision_only else float("inf")
+                )
                 diplo_msg, diplo_advanced = await _check_mid_turn_diplomacy(
                     gs, lua, turn_before
                 )
