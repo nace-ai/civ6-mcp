@@ -67,3 +67,9 @@ def test_captured_city_refreshes_cities_units_overview():
     assert refresh_parts(ActionKind.RESOLVE_CAPTURED_CITY) == frozenset(
         {"cities", "units", "overview", "blockers", "popup"}
     )
+
+
+def test_escape_route_refreshes_units():
+    assert refresh_parts(ActionKind.CHOOSE_ESCAPE_ROUTE) == frozenset(
+        {"units", "blockers", "popup"}
+    )

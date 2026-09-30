@@ -35,6 +35,7 @@ class DecisionCategory(StrEnum):
     BELIEF = "belief"
     CITY_ATTACK = "city_attack"
     CAPTURED_CITY = "captured_city"
+    SPY_ESCAPE = "spy_escape"
 
 
 class ActionKind(StrEnum):
@@ -71,6 +72,7 @@ class ActionKind(StrEnum):
     HOLD_FIRE = "hold_fire"  # no dispatch
     MAKE_TRADE_ROUTE = "make_trade_route"
     RESOLVE_CAPTURED_CITY = "resolve_captured_city"
+    CHOOSE_ESCAPE_ROUTE = "choose_escape_route"
 
 
 @dataclass(frozen=True)
@@ -261,6 +263,13 @@ class CapturedCityParams:
     action: str  # one of lua.drex_queries.CAPTURE_ACTIONS
 
 
+@dataclass(frozen=True)
+class EscapeRouteParams:
+    spy_unit_id: int
+    spy_name: str
+    district_type: str
+
+
 ActionParams = (
     ResearchParams
     | CivicParams
@@ -290,6 +299,7 @@ ActionParams = (
     | HoldFireParams
     | TradeRouteParams
     | CapturedCityParams
+    | EscapeRouteParams
 )
 
 PARAMS_FOR_KIND: dict[ActionKind, type] = {
@@ -326,6 +336,7 @@ PARAMS_FOR_KIND: dict[ActionKind, type] = {
     ActionKind.HOLD_FIRE: HoldFireParams,
     ActionKind.MAKE_TRADE_ROUTE: TradeRouteParams,
     ActionKind.RESOLVE_CAPTURED_CITY: CapturedCityParams,
+    ActionKind.CHOOSE_ESCAPE_ROUTE: EscapeRouteParams,
 }
 
 
@@ -419,6 +430,10 @@ def candidate_id_for(kind: ActionKind, params: ActionParams) -> str:
             return f"trade:{u.unit_id}:{x},{y}"
         case ActionKind.RESOLVE_CAPTURED_CITY, CapturedCityParams(city_id=c, action=a):
             return f"captured:{c}:{a}"
+        case ActionKind.CHOOSE_ESCAPE_ROUTE, EscapeRouteParams(
+            spy_unit_id=u, district_type=d
+        ):
+            return f"escape:{u}:{d}"
     raise TypeError(f"{kind} does not accept {type(params).__name__}")
 
 

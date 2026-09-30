@@ -85,6 +85,7 @@ class FakeGame:
         self.trade_status = fx.trade_status(capacity=0, active=0)
         self.trade_destinations: list = []
         self.captured = None  # Phase 4: pending captured/rebelled city
+        self.spy_escape = None  # Phase 4: caught spy awaiting an escape route
         # blockers the fake keeps raising even after the matching action
         self.sticky_blockers: set[str] = set()
         self.fail: dict[str, tuple[Exception, bool]] = {}
@@ -332,6 +333,11 @@ class FakeGame:
         self.query_counts["get_captured_city"] += 1
         self.conn.roundtrips += 1
         return copy.deepcopy(self.captured)
+
+    async def get_spy_escape_choice(self):
+        self.query_counts["get_spy_escape_choice"] += 1
+        self.conn.roundtrips += 1
+        return copy.deepcopy(self.spy_escape)
 
     async def get_religion_founding_status(self):
         self.query_counts["get_religion_founding_status"] += 1
@@ -602,6 +608,22 @@ class FakeGame:
         ]
         self._after(fail)
         return f"{action.upper()}|{name} (pop 4, id:{cid}, captured)"
+
+    async def choose_spy_escape(self, district_type):
+        fail = self._record("choose_spy_escape", district_type)
+        if self.spy_escape is None:
+            return "Error: NO_ESCAPING_SPY"
+        if district_type not in self.spy_escape.routes:
+            return f"Error: ROUTE_NOT_AVAILABLE|{district_type}"
+        name = self.spy_escape.spy_name
+        self.spy_escape = None
+        from civ_mcp.drex.scheduler import SPY_ESCAPE_BLOCKERS
+
+        self.extra_blockers = [
+            b for b in self.extra_blockers if b[0] not in SPY_ESCAPE_BLOCKERS
+        ]
+        self._after(fail)
+        return f"ESCAPE_ROUTE|{name}|{district_type}"
 
     async def found_religion(self, religion_type, follower_belief, founder_belief):
         fail = self._record(

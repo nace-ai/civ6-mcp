@@ -21,6 +21,7 @@ from civ_mcp.drex.enumerate import (
     dedication_candidates,
     diplomacy_candidates,
     envoy_candidates,
+    escape_route_candidates,
     government_candidates,
     governor_candidates,
     great_person_candidates,
@@ -62,6 +63,7 @@ QUESTIONS: dict[DecisionCategory, str] = {
     DecisionCategory.BELIEF: "Which belief should the empire add to its religion?",
     DecisionCategory.CITY_ATTACK: "Should this city fire its ranged attack, and at whom?",
     DecisionCategory.CAPTURED_CITY: "What should the empire do with this captured city?",
+    DecisionCategory.SPY_ESCAPE: "Which escape route should the caught spy take?",
 }
 
 
@@ -173,6 +175,8 @@ def _enumerate(
         )
     if cat is DecisionCategory.CAPTURED_CITY and inputs.captured_city is not None:
         return captured_city_candidates(inputs.captured_city), [], entity, inputs
+    if cat is DecisionCategory.SPY_ESCAPE and inputs.spy_escape is not None:
+        return escape_route_candidates(inputs.spy_escape), [], entity, inputs
     return [], [Exclusion(entity, f"no inputs for {cat}")], entity, inputs
 
 

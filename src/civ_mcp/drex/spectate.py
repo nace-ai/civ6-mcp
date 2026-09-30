@@ -20,6 +20,7 @@ from civ_mcp.drex.candidates import (
     AttackParams,
     Candidate,
     CapturedCityParams,
+    EscapeRouteParams,
     ImproveParams,
     MoveParams,
     ProductionParams,
@@ -167,4 +168,9 @@ def focus_point(
             if city is None:
                 return None
             return city.x, city.y, candidate.label
+        case ActionKind.CHOOSE_ESCAPE_ROUTE, EscapeRouteParams():
+            unit = core.unit(p.spy_unit_id)
+            if unit is None:
+                return None
+            return unit.x, unit.y, candidate.label
     return None

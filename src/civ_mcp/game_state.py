@@ -208,6 +208,20 @@ class GameState:
         lines = await self.conn.execute_write(lq_drex.build_captured_city_query())
         return lq_drex.parse_captured_city(lines)
 
+    async def get_spy_escape_choice(self) -> lq_drex.EscapeChoice | None:
+        """InGame: the caught spy and its available escape districts; None
+        when no escape prompt stands (the query never asks the engine for an
+        escaping spy without the prompt, which can crash the game)."""
+        lines = await self.conn.execute_write(lq_drex.build_spy_escape_options_query())
+        return lq_drex.parse_spy_escape_options(lines)
+
+    async def choose_spy_escape(self, district_type: str) -> str:
+        """InGame: choose the caught spy's escape route."""
+        lines = await self.conn.execute_write(
+            lq_drex.build_choose_spy_escape(district_type)
+        )
+        return _action_result(lines)
+
     async def add_belief(self, belief_type: str) -> str:
         """InGame: add a belief to our religion."""
         lines = await self.conn.execute_write(lq_drex.build_add_belief(belief_type))

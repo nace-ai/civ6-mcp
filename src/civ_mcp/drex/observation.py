@@ -118,6 +118,7 @@ class DecisionInputs:
     pantheon: lq.PantheonStatus | None = None
     # Phase 4 prompts
     captured_city: Any = None  # lua.drex_queries.CapturedCity
+    spy_escape: Any = None  # lua.drex_queries.EscapeChoice
 
 
 @dataclass

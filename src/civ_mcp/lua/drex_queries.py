@@ -413,3 +413,101 @@ def parse_captured_city(lines: list[str]) -> CapturedCity | None:
         return None
     city.options = [a for a in CAPTURE_ACTIONS if a in offered]
     return city
+
+
+ESCAPE_DISTRICTS = (  # the four routes EspionageEscape.lua offers, fastest first
+    "DISTRICT_AERODROME",
+    "DISTRICT_HARBOR",
+    "DISTRICT_COMMERCIAL_HUB",
+    "DISTRICT_CITY_CENTER",
+)
+
+
+@dataclass
+class EscapeChoice:
+    spy_unit_id: int
+    spy_name: str
+    city_name: str
+    x: int
+    y: int
+    routes: list[str]  # available escape districts, fastest first
+
+
+def _lua_escaping_spy() -> str:
+    """Shared prefix: find the escaping spy and its city, but only after one
+    of the two escape blockers' notifications is found standing —
+    ``GetNextEscapingSpyID`` crashes the game when nothing is escaping."""
+    return f"""
+local me = Game.GetLocalPlayer()
+local prompt = false
+local list = NotificationManager.GetList(me)
+if list then
+  for _, nid in ipairs(list) do
+    local e = NotificationManager.Find(me, nid)
+    if e and not e:IsDismissed() then
+      local bt = e:GetEndTurnBlocking()
+      if bt == EndTurnBlockingTypes.ENDTURN_BLOCKING_SPY_CHOOSE_ESCAPE_ROUTE or bt == EndTurnBlockingTypes.ENDTURN_BLOCKING_SPY_CHOOSE_DRAGNET_PRIORITY then prompt = true end
+    end
+  end
+end
+if not prompt then print("NO_ESCAPING_SPY"); print("{SENTINEL}"); return end
+local ok_esc, spyID = pcall(function() return Players[me]:GetDiplomacy():GetNextEscapingSpyID() end)
+if not ok_esc or spyID == nil or spyID < 0 then print("NO_ESCAPING_SPY"); print("{SENTINEL}"); return end
+local spy = Players[me]:GetUnits():FindID(spyID)
+if spy == nil then print("ERR:SPY_NOT_FOUND"); print("{SENTINEL}"); return end
+local city = Cities.GetPlotPurchaseCity(spy:GetX(), spy:GetY())
+if city == nil then print("ERR:NO_CITY"); print("{SENTINEL}"); return end
+local function hasRoute(d)
+  if d == "DISTRICT_CITY_CENTER" then return true end
+  local row = GameInfo.Districts[d]
+  if row == nil then return false end
+  local ok, has = pcall(function() return city:GetDistricts():HasDistrict(row.Index, true, true) end)
+  return ok and has
+end
+"""
+
+
+def build_spy_escape_options_query() -> str:
+    """InGame: the caught spy and the escape districts available in its city."""
+    routes = "\n".join(
+        f'if hasRoute("{d}") then print("ROUTE|{d}") end' for d in ESCAPE_DISTRICTS
+    )
+    return f"""
+{_lua_escaping_spy()}
+print("ESCAPE|" .. (spy:GetID() + me * 65536) .. "|" .. Locale.Lookup(spy:GetName()) .. "|" .. Locale.Lookup(city:GetName()) .. "|" .. spy:GetX() .. "|" .. spy:GetY())
+{routes}
+print("{SENTINEL}")
+"""
+
+
+def parse_spy_escape_options(lines: list[str]) -> EscapeChoice | None:
+    choice: EscapeChoice | None = None
+    found: set[str] = set()
+    for line in lines:
+        if line.startswith("ESCAPE|"):
+            p = line.split("|")
+            if len(p) >= 6:
+                choice = EscapeChoice(int(p[1]), p[2], p[3], int(p[4]), int(p[5]), [])
+        elif line.startswith("ROUTE|"):
+            found.add(line.split("|", 1)[1].strip())
+    if choice is None:
+        return None
+    choice.routes = [d for d in ESCAPE_DISTRICTS if d in found]
+    return choice
+
+
+def build_choose_spy_escape(district_type: str) -> str:
+    """InGame: set the caught spy's escape route (``SET_ESCAPE_ROUTE``, as the
+    popup does) after re-checking the district is available."""
+    if district_type not in ESCAPE_DISTRICTS:
+        return f'print("ERR:NOT_AN_ESCAPE_ROUTE|{district_type}"); print("{SENTINEL}")'
+    return f"""
+{_lua_escaping_spy()}
+if not hasRoute("{district_type}") then print("ERR:ROUTE_NOT_AVAILABLE|{district_type}"); print("{SENTINEL}"); return end
+local params = {{}}
+params[PlayerOperations.PARAM_DISTRICT_TYPE] = GameInfo.Districts["{district_type}"].Index
+UI.RequestPlayerOperation(me, PlayerOperations.SET_ESCAPE_ROUTE, params)
+pcall(function() local popup = ContextPtr:LookUpControl("/InGame/EspionageEscape") if popup then popup:SetHide(true) end end)
+print("OK:ESCAPE_ROUTE|" .. Locale.Lookup(spy:GetName()) .. "|{district_type}")
+print("{SENTINEL}")
+"""

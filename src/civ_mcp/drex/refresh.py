@@ -47,6 +47,7 @@ _TABLE: dict[ActionKind, frozenset[str]] = {
     ActionKind.HOLD_FIRE: frozenset(),
     ActionKind.MAKE_TRADE_ROUTE: frozenset({"units", "overview"}),
     ActionKind.RESOLVE_CAPTURED_CITY: frozenset({"cities", "units", "overview"}),
+    ActionKind.CHOOSE_ESCAPE_ROUTE: frozenset({"units"}),
 }
 
 

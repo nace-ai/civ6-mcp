@@ -654,3 +654,19 @@ def captured_city(options=("keep", "raze", "liberate_founder")):
         previous_owner="Greece",
         options=list(options),
     )
+
+
+SPY_ID = 65600
+
+
+def spy_escape(routes=("DISTRICT_HARBOR", "DISTRICT_CITY_CENTER")):
+    from civ_mcp.lua.drex_queries import EscapeChoice
+
+    return EscapeChoice(
+        spy_unit_id=SPY_ID,
+        spy_name="Artimpasa",
+        city_name="Athens",
+        x=20,
+        y=15,
+        routes=list(routes),
+    )

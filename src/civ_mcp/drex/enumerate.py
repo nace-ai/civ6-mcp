@@ -23,6 +23,7 @@ from civ_mcp.drex.candidates import (
     DedicationParams,
     DiplomacyParams,
     EnvoyParams,
+    EscapeRouteParams,
     Exclusion,
     FoundReligionParams,
     GovernmentParams,
@@ -738,6 +739,20 @@ def captured_city_candidates(city: Any) -> list[Candidate]:
         )
         for action in city.options
         if action in _CAPTURE_LABELS
+    ]
+
+
+def escape_route_candidates(choice: Any) -> list[Candidate]:
+    """One candidate per escape district the city has (fastest first, as the
+    game's popup lists them)."""
+    return [
+        Candidate.create(
+            ActionKind.CHOOSE_ESCAPE_ROUTE,
+            EscapeRouteParams(choice.spy_unit_id, choice.spy_name, d),
+            label=f"{choice.spy_name} escapes through the {pretty(d.replace('DISTRICT_', ''))}",
+            facts={"city": choice.city_name, "route_rank": i + 1},
+        )
+        for i, d in enumerate(choice.routes)
     ]
 
 

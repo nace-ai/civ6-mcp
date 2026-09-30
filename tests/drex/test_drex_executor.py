@@ -22,6 +22,7 @@ from civ_mcp.drex.enumerate import (
     dedication_candidates,
     diplomacy_candidates,
     envoy_candidates,
+    escape_route_candidates,
     government_candidates,
     governor_candidates,
     great_person_candidates,
@@ -312,6 +313,16 @@ DISPATCH_CASES.append(
         ("resolve_city_capture", ("raze",)),
     )
 )
+DISPATCH_CASES.append(
+    (
+        _cand(
+            escape_route_candidates(fx.spy_escape()),
+            ActionKind.CHOOSE_ESCAPE_ROUTE,
+            lambda c: c.params.district_type == "DISTRICT_HARBOR",
+        ),
+        ("choose_spy_escape", ("DISTRICT_HARBOR",)),
+    )
+)
 
 
 @pytest.mark.parametrize(
@@ -360,6 +371,7 @@ def test_executor_performs_the_mapped_call_and_confirms_or_acknowledges(cand, ex
     game.trade_status = fx.trade_status(2, 0)
     game.trade_destinations = fx.trade_destinations()
     game.captured = fx.captured_city()
+    game.spy_escape = fx.spy_escape()
     outcome = _run(game, cand)
     assert game.calls == [expected]
     assert outcome.dispatched is True

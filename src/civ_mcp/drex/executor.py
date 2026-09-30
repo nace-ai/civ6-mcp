@@ -41,6 +41,7 @@ from civ_mcp.drex.candidates import (
     DedicationParams,
     DiplomacyParams,
     EnvoyParams,
+    EscapeRouteParams,
     FoundReligionParams,
     GovernmentParams,
     GreatPersonParams,
@@ -191,6 +192,8 @@ def dispatch_call(candidate: Candidate) -> DispatchCall:
             )
         case ActionKind.RESOLVE_CAPTURED_CITY, CapturedCityParams():
             return DispatchCall("resolve_city_capture", (p.action,))
+        case ActionKind.CHOOSE_ESCAPE_ROUTE, EscapeRouteParams():
+            return DispatchCall("choose_spy_escape", (p.district_type,))
         case (
             (
                 ActionKind.WAIT_GREAT_PERSON
@@ -566,6 +569,17 @@ class Executor:
                     return _no("different_city_pending")
                 if p.action not in city.options:
                     return _no("action_not_available")
+                return _ok()
+
+            case ActionKind.CHOOSE_ESCAPE_ROUTE:
+                known = self._known.spy_escape if self._known is not None else None
+                esc = known if known is not None else await gs.get_spy_escape_choice()
+                if esc is None:
+                    return _no("no_spy_escaping")
+                if esc.spy_unit_id != p.spy_unit_id:
+                    return _no("different_spy_escaping")
+                if p.district_type not in esc.routes:
+                    return _no("route_not_available")
                 return _ok()
 
             case ActionKind.CITY_ATTACK:
@@ -948,6 +962,19 @@ class Executor:
                 if await self._poll(city_gone):
                     return confirmed("captured_city_no_longer_pending")
                 return self._unconfirmed(raw, "capture_not_observed")
+
+            case ActionKind.CHOOSE_ESCAPE_ROUTE:
+                if raw.startswith("ESCAPE_ROUTE|"):
+                    return confirmed("escape_route_confirmed_from_dispatch")
+                if _game_error(raw):
+                    return self._unconfirmed(raw, "escape_refused")
+
+                async def spy_gone():
+                    return (await gs.get_spy_escape_choice()) is None
+
+                if await self._poll(spy_gone):
+                    return confirmed("spy_no_longer_escaping")
+                return self._unconfirmed(raw, "escape_not_observed")
 
             case ActionKind.CITY_ATTACK:
                 if raw.startswith(("CITY_RANGE_ATTACK|", "OK:CITY_RANGE_ATTACK|")):
