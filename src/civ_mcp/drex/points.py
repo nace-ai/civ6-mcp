@@ -30,6 +30,7 @@ from civ_mcp.drex.enumerate import (
     religion_candidates,
     research_candidates,
     shortlist,
+    trade_route_candidates,
     unit_candidates,
 )
 from civ_mcp.drex.observation import (
@@ -98,6 +99,12 @@ def _enumerate(
     if cat is DecisionCategory.UNIT and inputs.unit and inputs.action_space:
         cands, excl = unit_candidates(
             inputs.action_space, inputs.unit, me=core.local_player_id
+        )
+        cands = cands + trade_route_candidates(
+            inputs.unit,
+            inputs.action_space,
+            inputs.trade_status,
+            inputs.trade_destinations,
         )
         return cands, excl, entity, inputs
     if cat is DecisionCategory.DIPLOMACY and inputs.session:

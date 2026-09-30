@@ -30,6 +30,7 @@ from civ_mcp.drex.enumerate import (
     promotion_candidates,
     religion_candidates,
     research_candidates,
+    trade_route_candidates,
     unit_candidates,
 )
 from civ_mcp.drex.executor import Executor, OutcomeStatus, dispatch_call
@@ -207,6 +208,21 @@ DISPATCH_CASES.append(
         ("city_attack", (fx.CAPITAL_ID, 11, 12)),
     )
 )
+DISPATCH_CASES.append(
+    (
+        _cand(
+            trade_route_candidates(
+                fx.trader(),
+                fx.trader_space(),
+                fx.trade_status(2, 0),
+                fx.trade_destinations(),
+            ),
+            ActionKind.MAKE_TRADE_ROUTE,
+            lambda c: c.params.city_name == "Kabul",
+        ),
+        ("make_trade_route", (fx.TRADER_IDX, 14, 12)),
+    )
+)
 _FOUND = religion_candidates(
     fx.religion_founding(),
     {"religion_type": "RELIGION_BUDDHISM", "follower_belief": "BELIEF_CHORAL_MUSIC"},
@@ -326,6 +342,10 @@ def test_executor_performs_the_mapped_call_and_confirms_or_acknowledges(cand, ex
     game.governor_status = fx.governors(points=1, unassigned=True)
     game.great_people = fx.great_people()
     game.city_targets = {fx.CAPITAL_ID: fx.city_targets()}
+    game.units[fx.TRADER_ID] = fx.trader()
+    game.spaces[fx.TRADER_IDX] = fx.trader_space()
+    game.trade_status = fx.trade_status(2, 0)
+    game.trade_destinations = fx.trade_destinations()
     outcome = _run(game, cand)
     assert game.calls == [expected]
     assert outcome.dispatched is True

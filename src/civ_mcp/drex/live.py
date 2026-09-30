@@ -200,7 +200,23 @@ class LiveObserver:
                     return DecisionInputs()
                 space = await gs.get_unit_action_space(unit.unit_index)
                 tiles = await gs.get_map_area(unit.x, unit.y, self.nearby_radius)
-                return DecisionInputs(unit=unit, action_space=space, nearby_tiles=tiles)
+                status = destinations = None
+                if unit.unit_type == "UNIT_TRADER":
+                    status = await gs.get_trade_routes()
+                    me = next(
+                        (t for t in status.traders if t.unit_id == unit.unit_id), None
+                    )
+                    if status.capacity > status.active_count and not (
+                        me is not None and me.on_route
+                    ):
+                        destinations = await gs.get_trade_destinations(unit.unit_index)
+                return DecisionInputs(
+                    unit=unit,
+                    action_space=space,
+                    nearby_tiles=tiles,
+                    trade_status=status,
+                    trade_destinations=destinations,
+                )
             case DecisionCategory.PRODUCTION:
                 city = core.city(eid)
                 if city is None:

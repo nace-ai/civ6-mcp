@@ -82,6 +82,8 @@ class FakeGame:
         self.religion_status = fx.religion_founding()
         self.city_targets: dict[int, list] = {}
         self.placements: dict[int, dict] = {}
+        self.trade_status = fx.trade_status(capacity=0, active=0)
+        self.trade_destinations: list = []
         # blockers the fake keeps raising even after the matching action
         self.sticky_blockers: set[str] = set()
         self.fail: dict[str, tuple[Exception, bool]] = {}
@@ -302,6 +304,16 @@ class FakeGame:
         if any(u.unit_id == unit_id for u in self.promotable):
             return fx.warrior_promotions()
         return lq.UnitPromotionStatus(unit_id, unit_id % 65536, "UNIT_WARRIOR")
+
+    async def get_trade_routes(self):
+        self.query_counts["get_trade_routes"] += 1
+        self.conn.roundtrips += 1
+        return copy.deepcopy(self.trade_status)
+
+    async def get_trade_destinations(self, unit_index):
+        self.query_counts["get_trade_destinations"] += 1
+        self.conn.roundtrips += 1
+        return copy.deepcopy(self.trade_destinations)
 
     async def get_placement_options(self, city_id, districts, wonders):
         self.query_counts["get_placement_options"] += 1
@@ -539,6 +551,22 @@ class FakeGame:
         self._governor_blockers_done()
         self._after(fail)
         return "PROMOTED|Pingala with Librarian"
+
+    async def make_trade_route(self, unit_index, target_x, target_y):
+        fail = self._record("make_trade_route", unit_index, target_x, target_y)
+        self.trade_status.active_count += 1
+        for t in self.trade_status.traders:
+            if t.unit_id % 65536 == unit_index:
+                t.on_route = True
+        self._set_pos(
+            unit_index, self._by_index(unit_index).x, self._by_index(unit_index).y, 0.0
+        )
+        self._after(fail)
+        dest = next(
+            (d for d in self.trade_destinations if (d.x, d.y) == (target_x, target_y)),
+            None,
+        )
+        return f"TRADE_ROUTE_STARTED|to {dest.city_name if dest else '?'}"
 
     async def city_attack(self, city_id, target_x, target_y):
         fail = self._record("city_attack", city_id, target_x, target_y)

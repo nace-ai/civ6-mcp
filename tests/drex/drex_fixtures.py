@@ -8,6 +8,7 @@ from civ_mcp import lua as lq
 
 ME = 0
 WARRIOR_ID, WARRIOR_IDX = 131073, 1
+TRADER_ID, TRADER_IDX = ME * 65536 + 5, 5
 SETTLER_ID, SETTLER_IDX = 262146, 2
 BUILDER_ID, BUILDER_IDX = 393219, 3
 CAPITAL_ID = 65536
@@ -572,3 +573,67 @@ def placements():
             Placement(11, 13, 1, "TERRAIN_DESERT_HILLS/none"),
         ],
     }
+
+
+def trader():
+    return lq.UnitInfo(
+        unit_id=TRADER_ID,
+        unit_index=TRADER_IDX,
+        name="Trader",
+        unit_type="UNIT_TRADER",
+        x=10,
+        y=10,
+        moves_remaining=1.0,
+        max_moves=1.0,
+        health=100,
+        max_health=100,
+    )
+
+
+def trader_space():
+    return lq.UnitActionSpace(
+        unit_id=TRADER_ID,
+        unit_index=TRADER_IDX,
+        unit_type="UNIT_TRADER",
+        x=10,
+        y=10,
+        moves_remaining=1.0,
+        is_civilian=True,
+        can_found=False,
+        can_fortify=False,
+        can_heal=False,
+        moved_into_zoc=False,
+        fortify_turns=0,
+        hp=100,
+        max_hp=100,
+        reachable=[],
+        targets=[],
+    )
+
+
+def trade_status(capacity: int = 2, active: int = 0, on_route: bool = False):
+    return lq.TradeRouteStatus(
+        capacity=capacity,
+        active_count=active,
+        traders=[
+            lq.TraderInfo(
+                TRADER_ID,
+                10,
+                10,
+                True,
+                on_route,
+                "Roma",
+                "Kabul" if on_route else "",
+                "Kabul" if on_route else "",
+            )
+        ],
+    )
+
+
+def trade_destinations():
+    return [
+        lq.TradeDestination("Roma", "Domestic", 10, 10, True),
+        lq.TradeDestination(
+            "Kabul", "Kabul", 14, 12, False, is_city_state=True, has_quest=True
+        ),
+    ]

@@ -37,6 +37,7 @@ from civ_mcp.drex.candidates import (
     PromoteParams,
     ReligionChoiceParams,
     ResearchParams,
+    TradeRouteParams,
     UnitOrderParams,
     UnitRef,
     WaitParams,
@@ -705,6 +706,39 @@ def city_attack_candidates(city: lq.CityInfo, targets: list[Any]) -> list[Candid
         )
     )
     return out
+
+
+def trade_route_candidates(
+    unit: lq.UnitInfo,
+    space: lq.UnitActionSpace,
+    status: lq.TradeRouteStatus | None,
+    destinations: list[lq.TradeDestination] | None,
+) -> list[Candidate]:
+    """One route per destination the engine offers this trader, only while a
+    route slot is free and the trader is not already travelling."""
+    if status is None or not destinations:
+        return []
+    if status.capacity <= status.active_count:
+        return []
+    me = next((t for t in status.traders if t.unit_id == unit.unit_id), None)
+    if me is not None and me.on_route:
+        return []
+    ref = UnitRef(space.unit_id, space.unit_index, space.unit_type, space.x, space.y)
+    return [
+        Candidate.create(
+            ActionKind.MAKE_TRADE_ROUTE,
+            TradeRouteParams(ref, d.x, d.y, d.city_name, d.owner_name),
+            label=f"Trade route to {d.city_name} ({d.owner_name})",
+            facts={
+                "domestic": d.is_domestic,
+                "city_state": d.is_city_state,
+                "quest": d.has_quest,
+                "trading_post": d.has_trading_post,
+                "distance": hex_distance(space.x, space.y, d.x, d.y),
+            },
+        )
+        for d in destinations
+    ]
 
 
 def pantheon_candidates(status: lq.PantheonStatus) -> list[Candidate]:

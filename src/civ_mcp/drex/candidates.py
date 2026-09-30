@@ -68,6 +68,7 @@ class ActionKind(StrEnum):
     ADD_BELIEF = "add_belief"
     CITY_ATTACK = "city_attack"
     HOLD_FIRE = "hold_fire"  # no dispatch
+    MAKE_TRADE_ROUTE = "make_trade_route"
 
 
 @dataclass(frozen=True)
@@ -242,6 +243,15 @@ class HoldFireParams:
     city_id: int
 
 
+@dataclass(frozen=True)
+class TradeRouteParams:
+    unit: UnitRef
+    target_x: int
+    target_y: int
+    city_name: str
+    owner_name: str
+
+
 ActionParams = (
     ResearchParams
     | CivicParams
@@ -269,6 +279,7 @@ ActionParams = (
     | FoundReligionParams
     | CityAttackParams
     | HoldFireParams
+    | TradeRouteParams
 )
 
 PARAMS_FOR_KIND: dict[ActionKind, type] = {
@@ -303,6 +314,7 @@ PARAMS_FOR_KIND: dict[ActionKind, type] = {
     ActionKind.ADD_BELIEF: BeliefParams,
     ActionKind.CITY_ATTACK: CityAttackParams,
     ActionKind.HOLD_FIRE: HoldFireParams,
+    ActionKind.MAKE_TRADE_ROUTE: TradeRouteParams,
 }
 
 
@@ -390,6 +402,10 @@ def candidate_id_for(kind: ActionKind, params: ActionParams) -> str:
             return f"city_attack:{c}:{x},{y}"
         case ActionKind.HOLD_FIRE, HoldFireParams(city_id=c):
             return f"hold_fire:{c}"
+        case ActionKind.MAKE_TRADE_ROUTE, TradeRouteParams(
+            unit=u, target_x=x, target_y=y
+        ):
+            return f"trade:{u.unit_id}:{x},{y}"
     raise TypeError(f"{kind} does not accept {type(params).__name__}")
 
 

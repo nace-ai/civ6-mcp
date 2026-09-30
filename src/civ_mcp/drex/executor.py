@@ -52,6 +52,7 @@ from civ_mcp.drex.candidates import (
     PromoteGovernorParams,
     PromoteParams,
     ResearchParams,
+    TradeRouteParams,
     UnitOrderParams,
     UnitRef,
 )
@@ -183,6 +184,10 @@ def dispatch_call(candidate: Candidate) -> DispatchCall:
             return DispatchCall("add_belief", (p.belief_type,))
         case ActionKind.CITY_ATTACK, CityAttackParams():
             return DispatchCall("city_attack", (p.city_id, p.target_x, p.target_y))
+        case ActionKind.MAKE_TRADE_ROUTE, TradeRouteParams():
+            return DispatchCall(
+                "make_trade_route", (p.unit.unit_index, p.target_x, p.target_y)
+            )
         case (
             (
                 ActionKind.WAIT_GREAT_PERSON
@@ -531,6 +536,22 @@ class Executor:
                 | ActionKind.CHOOSE_FOLLOWER_BELIEF
                 | ActionKind.HOLD_FIRE
             ):
+                return _ok()
+
+            case ActionKind.MAKE_TRADE_ROUTE:
+                space, why = await self._unit_space(p.unit)
+                if space is None:
+                    return _no(why)
+                known = (
+                    self._known.trade_destinations if self._known is not None else None
+                )
+                dests = (
+                    known
+                    if known is not None
+                    else await gs.get_trade_destinations(p.unit.unit_index)
+                )
+                if not any((d.x, d.y) == (p.target_x, p.target_y) for d in dests):
+                    return _no("destination_not_available")
                 return _ok()
 
             case ActionKind.CITY_ATTACK:
@@ -883,6 +904,22 @@ class Executor:
                 if await self._poll(cleared):
                     return confirmed("government_prompt_cleared")
                 return self._unconfirmed(raw, "government_prompt_still_blocking")
+
+            case ActionKind.MAKE_TRADE_ROUTE:
+                if raw.startswith(("TRADE_ROUTE_STARTED|", "OK:TRADE_ROUTE_STARTED|")):
+                    return confirmed("trade_route_started_from_dispatch")
+                if _game_error(raw):
+                    return self._unconfirmed(raw, "trade_route_refused")
+
+                async def routed():
+                    st = await gs.get_trade_routes()
+                    return any(
+                        t.unit_id == p.unit.unit_id and t.on_route for t in st.traders
+                    )
+
+                if await self._poll(routed):
+                    return confirmed("trade_route_observed")
+                return self._unconfirmed(raw, "trade_route_not_observed")
 
             case ActionKind.CITY_ATTACK:
                 if raw.startswith(("CITY_RANGE_ATTACK|", "OK:CITY_RANGE_ATTACK|")):

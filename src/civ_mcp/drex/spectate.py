@@ -22,6 +22,7 @@ from civ_mcp.drex.candidates import (
     ImproveParams,
     MoveParams,
     ProductionParams,
+    TradeRouteParams,
     UnitOrderParams,
 )
 from civ_mcp.drex.hexgrid import hex_distance
@@ -142,6 +143,8 @@ def focus_point(
         case ActionKind.MOVE_UNIT, MoveParams():
             return p.to_x, p.to_y, candidate.label
         case ActionKind.ATTACK, AttackParams():
+            return p.target_x, p.target_y, candidate.label
+        case ActionKind.MAKE_TRADE_ROUTE, TradeRouteParams():
             return p.target_x, p.target_y, candidate.label
         case (
             ActionKind.FOUND_CITY

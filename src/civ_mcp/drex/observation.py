@@ -113,6 +113,8 @@ class DecisionInputs:
     city_attack_city: lq.CityInfo | None = None
     placements: dict[str, list[Any]] | None = None  # item -> lua.drex_queries.Placement
     placement_errors: dict[str, str] | None = None
+    trade_status: lq.TradeRouteStatus | None = None
+    trade_destinations: list[lq.TradeDestination] | None = None
     pantheon: lq.PantheonStatus | None = None
 
 

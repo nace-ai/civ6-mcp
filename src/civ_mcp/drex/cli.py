@@ -345,8 +345,20 @@ async def _probe_placements(gs: Any) -> list[dict[str, Any]]:
 
 
 # One read-only query per Phase 2/3 decision kind, for `civ-drex probe --kind`.
+async def _probe_trade(gs: Any) -> dict[str, Any]:
+    status = await gs.get_trade_routes()
+    out: dict[str, Any] = {"status": status, "destinations": {}}
+    for t in status.traders:
+        if not t.on_route:
+            out["destinations"][t.unit_id] = await gs.get_trade_destinations(
+                t.unit_id % 65536
+            )
+    return out
+
+
 PROBE_KINDS: dict[str, Callable[[Any], Awaitable[Any]]] = {
     "placements": _probe_placements,
+    "trade": _probe_trade,
     "promotion": lambda gs: gs.get_promotable_units(),
     "governor": lambda gs: gs.get_governors(),
     "dedication": lambda gs: gs.get_dedications(),
