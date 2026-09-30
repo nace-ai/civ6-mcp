@@ -104,7 +104,10 @@ def _enumerate(
         return cands, excl, entity, inputs
     if cat is DecisionCategory.UNIT and inputs.unit and inputs.action_space:
         cands, excl = unit_candidates(
-            inputs.action_space, inputs.unit, me=core.local_player_id
+            inputs.action_space,
+            inputs.unit,
+            me=core.local_player_id,
+            gold=core.overview.gold,
         )
         cands = cands + trade_route_candidates(
             inputs.unit,

@@ -27,6 +27,7 @@ from civ_mcp.drex.candidates import (
     ProductionParams,
     TradeRouteParams,
     UnitOrderParams,
+    UpgradeParams,
 )
 from civ_mcp.drex.hexgrid import hex_distance
 from civ_mcp.drex.observation import CoreObservation
@@ -158,6 +159,8 @@ def focus_point(
         ):
             return p.unit.x, p.unit.y, candidate.label
         case ActionKind.IMPROVE_TILE, ImproveParams():
+            return p.unit.x, p.unit.y, candidate.label
+        case ActionKind.UPGRADE_UNIT, UpgradeParams():
             return p.unit.x, p.unit.y, candidate.label
         case ActionKind.SET_PRODUCTION, ProductionParams():
             city = core.city(p.city_id)

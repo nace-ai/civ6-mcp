@@ -58,6 +58,7 @@ from civ_mcp.drex.candidates import (
     TradeRouteParams,
     UnitOrderParams,
     UnitRef,
+    UpgradeParams,
 )
 from civ_mcp.drex.decision import StaleDecision, ensure_current
 from civ_mcp.drex.observation import DecisionInputs
@@ -197,6 +198,8 @@ def dispatch_call(candidate: Candidate) -> DispatchCall:
             return DispatchCall("choose_spy_escape", (p.district_type,))
         case ActionKind.CHOOSE_ARTIFACT_PLAYER, ArtifactParams():
             return DispatchCall("choose_artifact_player", (p.player_id,))
+        case ActionKind.UPGRADE_UNIT, UpgradeParams():
+            return DispatchCall("upgrade_unit", (p.unit.unit_id,))
         case (
             (
                 ActionKind.WAIT_GREAT_PERSON
@@ -594,6 +597,12 @@ class Executor:
                     return _no("different_archaeologist")
                 if p.player_id not in {pid for pid, _, _ in art.players}:
                     return _no("player_not_offered")
+                return _ok()
+
+            case ActionKind.UPGRADE_UNIT:
+                space, why = await self._unit_space(p.unit)
+                if space is None:
+                    return _no(why)
                 return _ok()
 
             case ActionKind.CITY_ATTACK:
@@ -1002,6 +1011,22 @@ class Executor:
                 if await self._poll(artifact_gone):
                     return confirmed("artifact_no_longer_pending")
                 return self._unconfirmed(raw, "artifact_not_observed")
+
+            case ActionKind.UPGRADE_UNIT:
+                if raw.startswith("UPGRADED|"):
+                    return confirmed("upgrade_confirmed_from_dispatch")
+                if _game_error(raw):
+                    return self._unconfirmed(raw, "upgrade_refused")
+
+                async def upgrade_spent():
+                    state = await gs.get_unit_state(p.unit.unit_index)
+                    return state is not None and state.moves_remaining <= 0
+
+                if await self._poll(upgrade_spent):
+                    return confirmed("moves_spent")
+                return ActionOutcome(
+                    OutcomeStatus.PENDING, "order_accepted_effect_later", True
+                )
 
             case ActionKind.CITY_ATTACK:
                 if raw.startswith(("CITY_RANGE_ATTACK|", "OK:CITY_RANGE_ATTACK|")):

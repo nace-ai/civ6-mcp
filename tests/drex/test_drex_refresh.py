@@ -79,3 +79,9 @@ def test_artifact_refreshes_units_and_overview():
     assert refresh_parts(ActionKind.CHOOSE_ARTIFACT_PLAYER) == frozenset(
         {"units", "overview", "blockers", "popup"}
     )
+
+
+def test_upgrade_refreshes_units_and_overview():
+    assert refresh_parts(ActionKind.UPGRADE_UNIT) == frozenset(
+        {"units", "overview", "blockers", "popup"}
+    )

@@ -1,6 +1,7 @@
 """Executor: typed dispatch, fresh prechecks, verified outcomes, no blind retries."""
 
 import asyncio
+import copy
 
 import drex_fixtures as fx
 import pytest
@@ -336,6 +337,24 @@ DISPATCH_CASES.append(
 )
 
 
+_UPGRADEABLE = fx.warrior()
+_UPGRADEABLE.can_upgrade, _UPGRADEABLE.upgrade_target, _UPGRADEABLE.upgrade_cost = (
+    True,
+    "UNIT_SWORDSMAN",
+    90,
+)
+DISPATCH_CASES.append(
+    (
+        _cand(
+            unit_candidates(fx.warrior_space(), _UPGRADEABLE, me=0, gold=500)[0],
+            ActionKind.UPGRADE_UNIT,
+            lambda c: True,
+        ),
+        ("upgrade_unit", (fx.WARRIOR_ID,)),
+    )
+)
+
+
 @pytest.mark.parametrize(
     "cand,expected", DISPATCH_CASES, ids=[c.candidate_id for c, _ in DISPATCH_CASES]
 )
@@ -384,6 +403,9 @@ def test_executor_performs_the_mapped_call_and_confirms_or_acknowledges(cand, ex
     game.captured = fx.captured_city()
     game.spy_escape = fx.spy_escape()
     game.artifact = fx.artifact_choice()
+    if cand.kind is ActionKind.UPGRADE_UNIT:
+        game.units[fx.WARRIOR_ID] = copy.deepcopy(_UPGRADEABLE)
+        game.gold = 500
     outcome = _run(game, cand)
     assert game.calls == [expected]
     assert outcome.dispatched is True

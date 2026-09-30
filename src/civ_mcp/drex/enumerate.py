@@ -43,6 +43,7 @@ from civ_mcp.drex.candidates import (
     TradeRouteParams,
     UnitOrderParams,
     UnitRef,
+    UpgradeParams,
     WaitParams,
 )
 from civ_mcp.drex.hexgrid import hex_distance
@@ -243,7 +244,11 @@ def _owner(owner_id: int, me: int) -> str:
 
 
 def unit_candidates(
-    space: lq.UnitActionSpace, unit: lq.UnitInfo, *, me: int
+    space: lq.UnitActionSpace,
+    unit: lq.UnitInfo,
+    *,
+    me: int,
+    gold: float | None = None,
 ) -> tuple[list[Candidate], list[Exclusion]]:
     """Orders for one unit from its engine-reported action space.
 
@@ -343,6 +348,35 @@ def unit_candidates(
                 facts={"charges_left": unit.build_charges},
             )
         )
+
+    if unit.can_upgrade and unit.upgrade_target:
+        target = unit.upgrade_target
+        if not same_tile:
+            excluded.append(
+                Exclusion(
+                    f"upgrade to {target}", "unit moved since upgrade was validated"
+                )
+            )
+        elif gold is not None and gold < unit.upgrade_cost:
+            excluded.append(
+                Exclusion(
+                    f"upgrade to {target}",
+                    f"costs {unit.upgrade_cost} gold, treasury {int(gold)}",
+                )
+            )
+        else:
+            out.append(
+                Candidate.create(
+                    ActionKind.UPGRADE_UNIT,
+                    UpgradeParams(unit=ref, target_type=target, cost=unit.upgrade_cost),
+                    label=f"Upgrade to {pretty(target.replace('UNIT_', ''))} ({unit.upgrade_cost} gold)",
+                    facts={
+                        "cost": unit.upgrade_cost,
+                        "treasury": None if gold is None else int(gold),
+                        "from": pretty(unit.unit_type.replace("UNIT_", "")),
+                    },
+                )
+            )
 
     if space.can_fortify and space.fortify_turns == 0:
         out.append(Candidate.create(ActionKind.FORTIFY_UNIT, order, label="Fortify"))

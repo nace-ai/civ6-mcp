@@ -75,6 +75,7 @@ class ActionKind(StrEnum):
     RESOLVE_CAPTURED_CITY = "resolve_captured_city"
     CHOOSE_ESCAPE_ROUTE = "choose_escape_route"
     CHOOSE_ARTIFACT_PLAYER = "choose_artifact_player"
+    UPGRADE_UNIT = "upgrade_unit"
 
 
 @dataclass(frozen=True)
@@ -279,6 +280,13 @@ class ArtifactParams:
     player_name: str
 
 
+@dataclass(frozen=True)
+class UpgradeParams:
+    unit: UnitRef
+    target_type: str
+    cost: int
+
+
 ActionParams = (
     ResearchParams
     | CivicParams
@@ -310,6 +318,7 @@ ActionParams = (
     | CapturedCityParams
     | EscapeRouteParams
     | ArtifactParams
+    | UpgradeParams
 )
 
 PARAMS_FOR_KIND: dict[ActionKind, type] = {
@@ -348,6 +357,7 @@ PARAMS_FOR_KIND: dict[ActionKind, type] = {
     ActionKind.RESOLVE_CAPTURED_CITY: CapturedCityParams,
     ActionKind.CHOOSE_ESCAPE_ROUTE: EscapeRouteParams,
     ActionKind.CHOOSE_ARTIFACT_PLAYER: ArtifactParams,
+    ActionKind.UPGRADE_UNIT: UpgradeParams,
 }
 
 
@@ -449,6 +459,8 @@ def candidate_id_for(kind: ActionKind, params: ActionParams) -> str:
             archaeologist_unit_id=u, player_id=pid
         ):
             return f"artifact:{u}:{pid}"
+        case ActionKind.UPGRADE_UNIT, UpgradeParams(unit=u):
+            return f"upgrade:{u.unit_id}"
     raise TypeError(f"{kind} does not accept {type(params).__name__}")
 
 

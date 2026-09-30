@@ -454,6 +454,30 @@ class FakeGame:
         self._after(fail)
         return "SKIPPED"
 
+    async def upgrade_unit(self, unit_id):
+        fail = self._record("upgrade_unit", unit_id)
+        u = self.units.get(unit_id)
+        if u is None:
+            return "Error: UNIT_NOT_FOUND"
+        if not u.can_upgrade or not u.upgrade_target:
+            return (
+                f"Error: CANNOT_UPGRADE|{u.unit_type} | cost:0g have:{int(self.gold)}g"
+            )
+        if self.gold < u.upgrade_cost:
+            return (
+                f"Error: CANNOT_UPGRADE|{u.unit_type} -> {u.upgrade_target}"
+                f" | cost:{u.upgrade_cost}g have:{int(self.gold)}g"
+            )
+        old, u.unit_type = u.unit_type, u.upgrade_target
+        self.gold -= u.upgrade_cost
+        u.can_upgrade, u.upgrade_target, u.upgrade_cost = False, "", 0
+        u.moves_remaining = 0
+        space = self.spaces.get(u.unit_index)
+        if space is not None:
+            space.moves_remaining = 0
+        self._after(fail)
+        return f"UPGRADED|{old} -> {u.unit_type}"
+
     async def diplomacy_respond(self, other_player_id, response):
         fail = self._record("diplomacy_respond", other_player_id, response)
         remaining = self.session_rounds.get(other_player_id, 1) - 1
