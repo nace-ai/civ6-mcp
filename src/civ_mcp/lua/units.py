@@ -86,7 +86,9 @@ for i, u in Players[id]:GetUnits():Members() do
                                         local lp = {{}}
                                         lp[UnitOperationTypes.PARAM_X] = tx
                                         lp[UnitOperationTypes.PARAM_Y] = ty
-                                        losOK = UnitManager.CanStartOperation(u, UnitOperationTypes.RANGE_ATTACK, nil, lp)
+                                        -- UnitManager only exists in UI Lua states; in GameCore assume line of sight
+                                        local okLos, los = pcall(function() return UnitManager.CanStartOperation(u, UnitOperationTypes.RANGE_ATTACK, nil, lp) end)
+                                        if okLos then losOK = los and true or false end
                                     end
                                     if losOK then
                                         local eInfo = GameInfo.Units[other:GetType()]

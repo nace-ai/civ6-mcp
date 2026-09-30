@@ -45,7 +45,7 @@ for i, u in p:GetUnits():Members() do
     end
 end
 local myScore = p:GetScore()
-local favor = p:GetFavor()
+local favor = 0; pcall(function() favor = p:GetFavor() end)
 local favorPerTurn = 0
 local pDiplo = p:GetDiplomacy()
 -- 1. Government tier bonus (govRow.Tier is a string like "GOVERNMENT_TIER_1")
@@ -122,13 +122,12 @@ for i = 0, 62 do
 end
 local maxRel = math.floor(nMajors / 2) + 1
 print("RELSLOTS|" .. nReligions .. "|" .. maxRel)
-local eraManager = Game.GetEras()
-local eraIdx = eraManager:GetCurrentEra()
+-- Game.GetEras (era score, ages) needs Rise and Fall; the base game only has Player:GetEra().
+local eraIdx, eraScore, darkThresh, goldenThresh = 0, 0, 0, 0
+local hasEras = pcall(function() local em = Game.GetEras(); eraIdx = em:GetCurrentEra(); eraScore = em:GetPlayerCurrentScore(id); darkThresh = em:GetPlayerDarkAgeThreshold(id); goldenThresh = em:GetPlayerGoldenAgeThreshold(id) end)
+if not hasEras then pcall(function() eraIdx = p:GetEra() end) end
 local eraEntry = GameInfo.Eras[eraIdx]
 local eraName = eraEntry and Locale.Lookup(eraEntry.Name) or "Unknown"
-local eraScore = eraManager:GetPlayerCurrentScore(id)
-local darkThresh = eraManager:GetPlayerDarkAgeThreshold(id)
-local goldenThresh = eraManager:GetPlayerGoldenAgeThreshold(id)
 print("ERA|" .. eraName .. "|" .. eraScore .. "|" .. darkThresh .. "|" .. goldenThresh)
 local maxTurns = GameConfiguration.GetValue("GAME_MAX_TURNS") or 0
 print("MAXTURNS|" .. maxTurns)

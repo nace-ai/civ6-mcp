@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from civ_mcp.lua._helpers import (
-    SENTINEL,
     _LUA_XP_THRESHOLD,
+    SENTINEL,
     _bail,
     _bail_lua,
     _int,

@@ -1819,6 +1819,7 @@ def _bring_to_front_win32() -> None:
     SetForegroundWindow, then detach.
     """
     import ctypes
+
     import win32gui
 
     win = _find_game_window_win32()

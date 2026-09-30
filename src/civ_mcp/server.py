@@ -20,15 +20,21 @@ import uvicorn
 from mcp.server.fastmcp import Context, FastMCP
 
 from civ_mcp import game_launcher, heartbeat
-from civ_mcp.game_over_watchdog import GameOverWatchdog
 from civ_mcp import narrate as nr
 from civ_mcp.connection import GameConnection, LuaError
 from civ_mcp.diary import (
     diary_path as _diary_path,
+)
+from civ_mcp.diary import (
     format_diary_entry as _format_diary_entry,
+)
+from civ_mcp.diary import (
     merge_agent_reflections as _merge_agent_reflections,
+)
+from civ_mcp.diary import (
     read_diary_entries as _read_diary_entries,
 )
+from civ_mcp.game_over_watchdog import GameOverWatchdog
 from civ_mcp.game_state import GameState
 from civ_mcp.logger import GameLogger
 from civ_mcp.map_capture import MapCapture

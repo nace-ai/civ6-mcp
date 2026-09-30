@@ -14,18 +14,18 @@ from civ_mcp.lua._helpers import (
 from civ_mcp.lua.models import (
     DistrictPlacement,
     FogBoundary,
-    OwnershipDelta,
-    StaticMapDump,
-    StaticMapTile,
-    WonderPlacement,
     NearbyResource,
     OwnedResource,
+    OwnershipDelta,
     PurchasableTile,
     ResourceStockpile,
     SettleCandidate,
+    StaticMapDump,
+    StaticMapTile,
     StrategicMapData,
     TileInfo,
     UnclaimedResource,
+    WonderPlacement,
 )
 
 # --- Shared Lua fragments for settle-scan scoring (used by two builders) ---
