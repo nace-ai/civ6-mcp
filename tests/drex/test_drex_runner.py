@@ -337,11 +337,52 @@ def test_lua_error_while_reading_inputs_is_recovered_not_fatal(tmp_path):
     game.get_unit_action_space = broken
     runner, checkpoints = _runner(game, tmp_path)
     runner._sleep = _no_sleep_async
+    runner.max_loop_iterations = 120
     result = asyncio.run(runner.run())
     assert result.stop_reason == "turn_budget_reached" and checkpoints == []
-    err = next(r for r in _records(tmp_path) if r["type"] == "game_io_error")
-    assert "LuaError" in err["error"] and err["phase"] == "schedule"
-    assert [r["type"] for r in _records(tmp_path)].count("header") == 1
+    recs = _records(tmp_path)
+    # a Lua error on a read is not a dead game: no restart, one retry, then the
+    # unit is skipped as housekeeping so the turn can end
+    assert not [r for r in recs if r["type"] == "game_io_error"]
+    errs = [r for r in recs if r["type"] == "inputs_error"]
+    # the prefetch swallowed the first failure; the fresh read hit the second,
+    # the retry succeeded, so the unit was decided normally
+    assert [e["attempt"] for e in errs] == [1]
+    assert not any(
+        r["type"] == "housekeeping" and r["action"] == "unit_skipped_after_inputs_error"
+        for r in recs
+    )
+    assert [r["type"] for r in recs].count("header") == 1
+
+
+def test_persistent_lua_error_on_a_unit_skips_it_so_the_turn_can_end(tmp_path):
+    from civ_mcp.connection import LuaError
+
+    game = FakeGame()
+    original = game.get_unit_action_space
+
+    async def broken(unit_index):
+        if unit_index == fx.WARRIOR_IDX:
+            raise LuaError("ERR: attempt to index a nil value")
+        return await original(unit_index)
+
+    game.get_unit_action_space = broken
+    runner, checkpoints = _runner(game, tmp_path)
+    runner._sleep = _no_sleep_async
+    runner.max_loop_iterations = 120
+    result = asyncio.run(runner.run())
+    assert result.stop_reason == "turn_budget_reached" and checkpoints == []
+    recs = _records(tmp_path)
+    assert not [r for r in recs if r["type"] == "game_io_error"]
+    assert [e["attempt"] for e in recs if e["type"] == "inputs_error"] == [1, 2]
+    skipped = [
+        r
+        for r in recs
+        if r["type"] == "housekeeping"
+        and r["action"] == "unit_skipped_after_inputs_error"
+    ]
+    assert skipped and skipped[0]["unit_id"] == fx.WARRIOR_ID
+    assert ("skip_unit", (fx.WARRIOR_IDX,)) in game.calls
 
 
 def test_war_interruption_allows_exactly_one_new_end_turn_request(tmp_path):
@@ -667,3 +708,33 @@ def test_supported_blocker_with_nothing_to_decide_waits_instead_of_hammering(tmp
     recs = [r for r in _records(tmp_path) if r["type"] == "supported_blocker_stuck"]
     assert recs and "ENDTURN_BLOCKING_GIVE_INFLUENCE_TOKEN" in recs[0]["blockers"]
     assert max(slept) >= 30.0
+
+
+def test_lua_error_while_reading_inputs_exhausts_the_decision_not_the_run(tmp_path):
+    """Live: the foreign-policy inputs read raised a LuaError every turn; the
+    runner treated it as a dead game, restarted its loop, and re-asked the
+    same purchase and city-attack decisions forever."""
+    from civ_mcp.connection import LuaError
+
+    game = FakeGame()
+    game.gold = 300
+
+    async def boom():
+        raise LuaError("ERR:Runtime Error: function expected instead of nil")
+
+    game.get_diplomacy = boom
+    from test_drex_foreign_policy import _met
+
+    _met(game)
+    runner, checkpoints = _runner(game, tmp_path)
+    runner.max_loop_iterations = 80
+    result = asyncio.run(runner.run())
+    assert result.stop_reason == "turn_budget_reached"
+    recs = _records(tmp_path)
+    assert not [r for r in recs if r["type"] == "game_io_error"]
+    errs = [r for r in recs if r["type"] == "inputs_error"]
+    assert errs and errs[0]["category"] == "foreign_policy"
+    purchases = [
+        r for r in recs if r["type"] == "decision" and r["category"] == "purchase"
+    ]
+    assert len(purchases) == 1

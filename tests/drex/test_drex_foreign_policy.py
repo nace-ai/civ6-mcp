@@ -94,6 +94,12 @@ def test_friendship_embassy_denounce_open_borders_and_alliance_map_to_kinds():
     ]
 
 
+def test_scheduler_skips_foreign_policy_when_nobody_is_met():
+    game = FakeGame()
+    game.gold = 300
+    assert DecisionCategory.FOREIGN_POLICY not in _walk(game)
+
+
 def test_no_action_candidate_is_always_present():
     game = FakeGame()
     game.civs = [fx.civs()[2]]  # nobody met
@@ -124,9 +130,21 @@ def _walk(game):
     return seen
 
 
+def _met(game):
+    from civ_mcp import lua as lq
+
+    fields = [f.name for f in lq.ScoreEntry.__dataclass_fields__.values()]
+    game.rankings = [
+        lq.ScoreEntry(
+            **dict(zip(fields, (1, "Egypt", 40, 0, 0, 0, 0, 0)[: len(fields)]))
+        )
+    ]
+
+
 def test_scheduler_offers_foreign_policy_once_per_turn_after_purchases():
     game = FakeGame()
     game.gold = 300
+    _met(game)
     seen = _walk(game)
     assert seen.count(DecisionCategory.FOREIGN_POLICY) == 1
     assert seen.index(DecisionCategory.FOREIGN_POLICY) > seen.index(
@@ -210,3 +228,12 @@ def test_alliance_dispatches_and_confirms():
     out = _execute(game, "alliance:1:MILITARY")
     assert out.status is OutcomeStatus.CONFIRMED
     assert ("form_alliance", (1, "MILITARY")) in game.calls
+
+
+def test_diplomacy_query_survives_rulesets_without_grievances():
+    # Live (Base ruleset): pDiplo:GetGrievancesAgainst is nil → "function
+    # expected instead of nil" on every foreign-policy inputs read.
+    from civ_mcp.lua.diplomacy import build_diplomacy_query
+
+    lua = build_diplomacy_query()
+    assert "pcall(function() return pDiplo:GetGrievancesAgainst(i) end)" in lua

@@ -91,6 +91,7 @@ class FakeGame:
         self.stacked_units_on_tile: set[str] = set()  # Phase 5: purchases refused
         self.turn_active = True  # False while the engine processes the AI turn
         self.civs = fx.civs()  # Phase 6: foreign policy
+        self.rankings = None  # met civs' scores; truthy once someone is met
         self.war_uncertain = False
         # blockers the fake keeps raising even after the matching action
         self.sticky_blockers: set[str] = set()
@@ -170,6 +171,7 @@ class FakeGame:
             )
         ov = fx.overview(turn=self.turn, research=research)
         ov.gold = self.gold
+        ov.rankings = self.rankings
         ov.num_units = len(self.units)
         ov.num_cities = len(self.cities)
         return ov

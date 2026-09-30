@@ -9,6 +9,13 @@ from civ_mcp.drex.observation import Blocker, CoreObservation, DecisionSpec
 from civ_mcp.drex.scheduler import EndTurn, Scheduler, TurnLedger
 
 
+def _no_met(ov):
+    """Nobody met: the once-per-turn foreign-policy step stays out of these
+    order tests (covered by test_drex_foreign_policy)."""
+    ov.rankings = None
+    return ov
+
+
 def _core(
     research=None,
     civic="CIVIC_CODE_OF_LAWS",
@@ -22,7 +29,7 @@ def _core(
         civ="rome",
         seed=42,
         local_player_id=fx.ME,
-        overview=fx.overview(),
+        overview=_no_met(fx.overview()),
         tech=fx.tech_status(),
         progress=lq.ProgressTypes(research, civic),
         cities=[fx.capital(building=building)],

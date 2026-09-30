@@ -37,7 +37,8 @@ for i = 0, 62 do
             local ai = Players[i]:GetDiplomaticAI()
             local stateIdx = ai:GetDiplomaticStateIndex(me)
             local stateName = states[stateIdx + 1] or tostring(stateIdx)
-            local grievances = pDiplo:GetGrievancesAgainst(i)
+            local grievances = 0
+            do local okG, g = pcall(function() return pDiplo:GetGrievancesAgainst(i) end) if okG and g then grievances = g end end
             local vis = pDiplo:GetVisibilityOn(i)
             local hasDel = pDiplo:HasDelegationAt(i) and "1" or "0"
             local hasEmb = pDiplo:HasEmbassyAt(i) and "1" or "0"

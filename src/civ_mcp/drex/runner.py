@@ -742,7 +742,49 @@ class Runner:
                 core = await self._observe(reactive_from=core if in_flight else None)
                 continue
 
-            inputs = await self._take_inputs(step, core)
+            try:
+                inputs = await self._take_inputs(step, core)
+            except LuaError as e:
+                # The game answered with a Lua error for this decision's reads:
+                # the game is alive, not dead. Retry the read once (transient
+                # errors happen mid-animation); then give the decision up for
+                # this turn. A unit given up this way is skipped so it cannot
+                # hold the turn open.
+                key = key_for(step)
+                ledger.failures[key] += 1
+                self.log.write(
+                    "inputs_error",
+                    {
+                        "turn": core.turn,
+                        "category": str(step.category),
+                        "entity": step.entity,
+                        "attempt": ledger.failures[key],
+                        "error": f"{type(e).__name__}: {e}",
+                    },
+                )
+                if ledger.failures[key] < self.scheduler.max_failures_per_key:
+                    continue
+                self.scheduler.exhaust(ledger, step)
+                if step.category is DecisionCategory.UNIT:
+                    unit = core.unit(step.entity_id)
+                    if unit is not None:
+                        try:
+                            raw = await self.gs.skip_unit(unit.unit_index)
+                        except Exception as se:  # noqa: BLE001 — logged; the turn continues
+                            raw = f"{type(se).__name__}: {se}"
+                        self.log.write(
+                            "housekeeping",
+                            {
+                                "turn": core.turn,
+                                "action": "unit_skipped_after_inputs_error",
+                                "unit_id": unit.unit_id,
+                                "raw": raw,
+                            },
+                        )
+                        core = await self._observe(
+                            refresh=(frozenset({"units", "blockers", "popup"}), core)
+                        )
+                continue
             if step.category is DecisionCategory.RELIGION:
                 inputs = dataclasses.replace(
                     inputs, religion_partial=dict(ledger.religion_partial)

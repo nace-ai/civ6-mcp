@@ -501,7 +501,8 @@ class Scheduler:
             if self._open(ledger, spec):
                 return spec
 
-        if not ledger.foreign_policy_offered:
+        # rankings list the met major civilizations: nobody met, nothing to decide
+        if not ledger.foreign_policy_offered and core.overview.rankings:
             spec = DecisionSpec(DecisionCategory.FOREIGN_POLICY, "empire")
             if self._open(ledger, spec):
                 return spec
