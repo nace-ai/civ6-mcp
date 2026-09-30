@@ -25,6 +25,7 @@ from civ_mcp.drex.candidates import (
     ImproveParams,
     MoveParams,
     ProductionParams,
+    PurchaseParams,
     TradeRouteParams,
     UnitOrderParams,
     UpgradeParams,
@@ -163,6 +164,11 @@ def focus_point(
         case ActionKind.UPGRADE_UNIT, UpgradeParams():
             return p.unit.x, p.unit.y, candidate.label
         case ActionKind.SET_PRODUCTION, ProductionParams():
+            city = core.city(p.city_id)
+            if city is None:
+                return None
+            return city.x, city.y, candidate.label
+        case ActionKind.PURCHASE_ITEM, PurchaseParams():
             city = core.city(p.city_id)
             if city is None:
                 return None

@@ -283,6 +283,16 @@ class LiveObserver:
                 return DecisionInputs(spy_escape=await gs.get_spy_escape_choice())
             case DecisionCategory.ARTIFACT:
                 return DecisionInputs(artifact=await gs.get_artifact_choice())
+            case DecisionCategory.PURCHASE:
+                options: dict[int, list[Any]] = {}
+                for city in core.cities:
+                    options[city.city_id] = await gs.list_city_production(city.city_id)
+                wonders = await self._wonder_types(core.game_identity)
+                return DecisionInputs(
+                    purchase_options=options,
+                    wonder_types=sorted(wonders),
+                    treasury=core.overview.gold,
+                )
             case DecisionCategory.RELIGION | DecisionCategory.BELIEF:
                 return DecisionInputs(religion=await gs.get_religion_founding_status())
             case DecisionCategory.GREAT_PERSON:

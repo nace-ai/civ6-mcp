@@ -32,6 +32,7 @@ from civ_mcp.drex.enumerate import (
     policy_candidates,
     production_candidates,
     promotion_candidates,
+    purchase_candidates,
     religion_candidates,
     research_candidates,
     trade_route_candidates,
@@ -355,6 +356,23 @@ DISPATCH_CASES.append(
 )
 
 
+DISPATCH_CASES.append(
+    (
+        _cand(
+            purchase_candidates(
+                [fx.capital()],
+                {fx.CAPITAL_ID: fx.production_options()},
+                300,
+                fx.WONDERS,
+            )[0],
+            ActionKind.PURCHASE_ITEM,
+            lambda c: c.params.item_name == "UNIT_BUILDER",
+        ),
+        ("purchase_item", (fx.CAPITAL_ID, "UNIT", "UNIT_BUILDER", "YIELD_GOLD")),
+    )
+)
+
+
 @pytest.mark.parametrize(
     "cand,expected", DISPATCH_CASES, ids=[c.candidate_id for c, _ in DISPATCH_CASES]
 )
@@ -369,6 +387,7 @@ NO_DISPATCH_KINDS = {
     ActionKind.CHOOSE_RELIGION,
     ActionKind.CHOOSE_FOLLOWER_BELIEF,
     ActionKind.HOLD_FIRE,
+    ActionKind.SAVE_GOLD,
 }
 # Phase 2 kinds whose candidate builders and fakes land in later tasks; each
 # task removes its kinds here and adds them to DISPATCH_CASES.
@@ -405,6 +424,8 @@ def test_executor_performs_the_mapped_call_and_confirms_or_acknowledges(cand, ex
     game.artifact = fx.artifact_choice()
     if cand.kind is ActionKind.UPGRADE_UNIT:
         game.units[fx.WARRIOR_ID] = copy.deepcopy(_UPGRADEABLE)
+        game.gold = 500
+    if cand.kind is ActionKind.PURCHASE_ITEM:
         game.gold = 500
     outcome = _run(game, cand)
     assert game.calls == [expected]

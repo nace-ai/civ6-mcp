@@ -120,6 +120,9 @@ class DecisionInputs:
     captured_city: Any = None  # lua.drex_queries.CapturedCity
     spy_escape: Any = None  # lua.drex_queries.EscapeChoice
     artifact: Any = None  # lua.drex_queries.ArtifactChoice
+    # Phase 5 purchases: production lists per city and the treasury observed
+    purchase_options: dict[int, list[lq.ProductionOption]] | None = None
+    treasury: float | None = None
 
 
 @dataclass

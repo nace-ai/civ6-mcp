@@ -38,8 +38,10 @@ from civ_mcp.drex.candidates import (
     ProductionParams,
     PromoteGovernorParams,
     PromoteParams,
+    PurchaseParams,
     ReligionChoiceParams,
     ResearchParams,
+    SaveGoldParams,
     TradeRouteParams,
     UnitOrderParams,
     UnitRef,
@@ -805,6 +807,65 @@ def artifact_candidates(choice: Any) -> list[Candidate]:
     ]
 
 
+def purchase_candidates(
+    cities: list[lq.CityInfo],
+    options_by_city: dict[int, list[lq.ProductionOption]],
+    gold: float,
+    wonder_types: set[str],
+) -> tuple[list[Candidate], list[Exclusion]]:
+    """Every affordable unit or building purchase in every city (the engine's
+    ``gold_cost``; wonders and repairs are never purchasable) plus one "save
+    the gold" option. With nothing affordable only "save" remains and the
+    single-legal-option rule executes it without a Drex call."""
+    out: list[Candidate] = []
+    excluded: list[Exclusion] = []
+    for city in sorted(cities, key=lambda c: c.city_id):
+        for opt in options_by_city.get(city.city_id, []):
+            if (
+                opt.gold_cost < 0
+                or opt.is_repair
+                or opt.category not in ("UNIT", "BUILDING")
+                or opt.item_name in wonder_types
+            ):
+                continue
+            if opt.gold_cost > gold:
+                excluded.append(
+                    Exclusion(
+                        f"{city.name}: {opt.item_name}",
+                        f"costs {opt.gold_cost} gold, treasury {int(gold)}",
+                    )
+                )
+                continue
+            out.append(
+                Candidate.create(
+                    ActionKind.PURCHASE_ITEM,
+                    PurchaseParams(
+                        city.city_id,
+                        city.name,
+                        opt.category,
+                        opt.item_name,
+                        opt.gold_cost,
+                    ),
+                    label=f"Buy {pretty(opt.item_name)} in {city.name} ({opt.gold_cost} gold)",
+                    facts={
+                        "city": city.name,
+                        "gold_cost": opt.gold_cost,
+                        "treasury": int(gold),
+                        "production_turns": opt.turns,
+                    },
+                )
+            )
+    out.append(
+        Candidate.create(
+            ActionKind.SAVE_GOLD,
+            SaveGoldParams(),
+            label="Save the gold (buy nothing this turn)",
+            facts={"treasury": int(gold)},
+        )
+    )
+    return out, excluded
+
+
 def trade_route_candidates(
     unit: lq.UnitInfo,
     space: lq.UnitActionSpace,
@@ -879,6 +940,26 @@ def shortlist(
         dropped = [
             Exclusion(
                 c.candidate_id, f"over option limit {limit} (lowest placement score)"
+            )
+            for c in candidates
+            if c.candidate_id in drop_ids
+        ]
+        if len(kept) <= limit:
+            return kept, dropped
+        more_kept, more_dropped = shortlist(kept, limit)
+        return more_kept, dropped + more_dropped
+    # Purchases give way next, most expensive first; "save the gold" stays.
+    buys = sorted(
+        (c for c in candidates if c.kind is ActionKind.PURCHASE_ITEM),
+        key=lambda c: (-c.params.gold_cost, c.candidate_id),
+    )
+    over = len(candidates) - limit
+    if buys and over > 0:
+        drop_ids = {c.candidate_id for c in buys[:over]}
+        kept = [c for c in candidates if c.candidate_id not in drop_ids]
+        dropped = [
+            Exclusion(
+                c.candidate_id, f"over option limit {limit} (most expensive purchase)"
             )
             for c in candidates
             if c.candidate_id in drop_ids

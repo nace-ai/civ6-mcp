@@ -48,6 +48,7 @@ SCHEDULER_ORDER = (
     "civic: only when none selected",
     "production: empty queues, ascending city id",
     "city_attack: every city once per turn (attack a target or hold fire)",
+    "purchase: once per turn when the treasury holds PURCHASE_MIN_GOLD or more (buy an affordable item in a city, or save the gold)",
     "great_person: forced claim, or once per turn when someone is claimable",
     "unit: moves left, ascending unit id, bounded decisions per unit",
     "end turn",
@@ -85,6 +86,11 @@ SPY_ESCAPE_BLOCKERS = frozenset(
     }
 )
 ARTIFACT_BLOCKER = "ENDTURN_BLOCKING_ARTIFACT"
+# Purchase inputs (one production read per city) are read only when the
+# treasury holds at least this much: below the cheapest unit purchase at
+# standard speed, so nothing affordable is ever skipped. A read gate, not a
+# choice.
+PURCHASE_MIN_GOLD = 60
 # Modal prompts: decided first, repeat while the blocker stands (bounded), and
 # a blocker that stands once nothing is pending is dismissed as housekeeping.
 PROMPT_BLOCKERS: tuple[tuple[frozenset[str], DecisionCategory], ...] = (
@@ -164,6 +170,7 @@ class TurnLedger:
     # the city attack blocker was seen this turn and the per-city checks were
     # re-opened for it once (a blocker raised mid-turn is decided, not dismissed)
     attack_reopened: bool = False
+    purchase_offered: bool = False
     # prompt categories re-opened after their blocker was dismissed and came
     # back the same turn (a second captured city); bounded per category
     prompt_reopens: Counter[str] = field(default_factory=Counter)
@@ -182,6 +189,7 @@ def key_for(spec: DecisionSpec) -> str:
         DecisionCategory.GREAT_PERSON,
         DecisionCategory.RELIGION,
         DecisionCategory.BELIEF,
+        DecisionCategory.PURCHASE,
         *PROMPT_CATEGORIES,
     ):
         return str(spec.category)
@@ -479,6 +487,11 @@ class Scheduler:
             if self._open(ledger, spec):
                 return spec
 
+        if not ledger.purchase_offered and core.overview.gold >= PURCHASE_MIN_GOLD:
+            spec = DecisionSpec(DecisionCategory.PURCHASE, "empire")
+            if self._open(ledger, spec):
+                return spec
+
         if not ledger.great_people_offered and _claimable(core):
             spec = DecisionSpec(DecisionCategory.GREAT_PERSON, "empire")
             if self._open(ledger, spec):
@@ -505,6 +518,8 @@ class Scheduler:
         if spec.category is DecisionCategory.GREAT_PERSON:
             # one Great People decision per turn, whatever its outcome
             ledger.great_people_offered = True
+        if spec.category is DecisionCategory.PURCHASE:
+            ledger.purchase_offered = True  # one purchase decision per turn
         if outcome.status not in (OutcomeStatus.CONFIRMED, OutcomeStatus.PENDING):
             ledger.failures[key] += 1
             if candidate_id:

@@ -85,3 +85,10 @@ def test_upgrade_refreshes_units_and_overview():
     assert refresh_parts(ActionKind.UPGRADE_UNIT) == frozenset(
         {"units", "overview", "blockers", "popup"}
     )
+
+
+def test_purchase_refreshes_overview_cities_units_and_save_only_blockers():
+    assert refresh_parts(ActionKind.PURCHASE_ITEM) == frozenset(
+        {"overview", "cities", "units", "blockers", "popup"}
+    )
+    assert refresh_parts(ActionKind.SAVE_GOLD) == frozenset({"blockers", "popup"})

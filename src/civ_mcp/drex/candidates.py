@@ -37,6 +37,7 @@ class DecisionCategory(StrEnum):
     CAPTURED_CITY = "captured_city"
     SPY_ESCAPE = "spy_escape"
     ARTIFACT = "artifact"
+    PURCHASE = "purchase"
 
 
 class ActionKind(StrEnum):
@@ -76,6 +77,8 @@ class ActionKind(StrEnum):
     CHOOSE_ESCAPE_ROUTE = "choose_escape_route"
     CHOOSE_ARTIFACT_PLAYER = "choose_artifact_player"
     UPGRADE_UNIT = "upgrade_unit"
+    PURCHASE_ITEM = "purchase_item"
+    SAVE_GOLD = "save_gold"  # no dispatch: a real "buy nothing" choice
 
 
 @dataclass(frozen=True)
@@ -287,6 +290,20 @@ class UpgradeParams:
     cost: int
 
 
+@dataclass(frozen=True)
+class PurchaseParams:
+    city_id: int
+    city_name: str
+    item_type: str  # UNIT / BUILDING
+    item_name: str
+    gold_cost: int
+
+
+@dataclass(frozen=True)
+class SaveGoldParams:
+    pass
+
+
 ActionParams = (
     ResearchParams
     | CivicParams
@@ -319,6 +336,8 @@ ActionParams = (
     | EscapeRouteParams
     | ArtifactParams
     | UpgradeParams
+    | PurchaseParams
+    | SaveGoldParams
 )
 
 PARAMS_FOR_KIND: dict[ActionKind, type] = {
@@ -358,6 +377,8 @@ PARAMS_FOR_KIND: dict[ActionKind, type] = {
     ActionKind.CHOOSE_ESCAPE_ROUTE: EscapeRouteParams,
     ActionKind.CHOOSE_ARTIFACT_PLAYER: ArtifactParams,
     ActionKind.UPGRADE_UNIT: UpgradeParams,
+    ActionKind.PURCHASE_ITEM: PurchaseParams,
+    ActionKind.SAVE_GOLD: SaveGoldParams,
 }
 
 
@@ -461,6 +482,12 @@ def candidate_id_for(kind: ActionKind, params: ActionParams) -> str:
             return f"artifact:{u}:{pid}"
         case ActionKind.UPGRADE_UNIT, UpgradeParams(unit=u):
             return f"upgrade:{u.unit_id}"
+        case ActionKind.PURCHASE_ITEM, PurchaseParams(
+            city_id=c, item_type=t, item_name=n
+        ):
+            return f"purchase:{c}:{t}:{n}"
+        case ActionKind.SAVE_GOLD, SaveGoldParams():
+            return "save_gold"
     raise TypeError(f"{kind} does not accept {type(params).__name__}")
 
 

@@ -54,6 +54,7 @@ from civ_mcp.drex.candidates import (
     ProductionParams,
     PromoteGovernorParams,
     PromoteParams,
+    PurchaseParams,
     ResearchParams,
     TradeRouteParams,
     UnitOrderParams,
@@ -200,12 +201,17 @@ def dispatch_call(candidate: Candidate) -> DispatchCall:
             return DispatchCall("choose_artifact_player", (p.player_id,))
         case ActionKind.UPGRADE_UNIT, UpgradeParams():
             return DispatchCall("upgrade_unit", (p.unit.unit_id,))
+        case ActionKind.PURCHASE_ITEM, PurchaseParams():
+            return DispatchCall(
+                "purchase_item", (p.city_id, p.item_type, p.item_name, "YIELD_GOLD")
+            )
         case (
             (
                 ActionKind.WAIT_GREAT_PERSON
                 | ActionKind.CHOOSE_RELIGION
                 | ActionKind.CHOOSE_FOLLOWER_BELIEF
                 | ActionKind.HOLD_FIRE
+                | ActionKind.SAVE_GOLD
             ),
             _,
         ):
@@ -547,6 +553,7 @@ class Executor:
                 | ActionKind.CHOOSE_RELIGION
                 | ActionKind.CHOOSE_FOLLOWER_BELIEF
                 | ActionKind.HOLD_FIRE
+                | ActionKind.SAVE_GOLD
             ):
                 return _ok()
 
@@ -604,6 +611,35 @@ class Executor:
                 if space is None:
                     return _no(why)
                 return _ok()
+
+            case ActionKind.PURCHASE_ITEM:
+                known_opts = (
+                    self._known.purchase_options if self._known is not None else None
+                )
+                opts = (
+                    known_opts.get(p.city_id, [])
+                    if known_opts is not None
+                    else await gs.list_city_production(p.city_id)
+                )
+                opt = next(
+                    (
+                        o
+                        for o in opts
+                        if o.item_name == p.item_name and o.gold_cost >= 0
+                    ),
+                    None,
+                )
+                if opt is None:
+                    return _no("item_not_purchasable")
+                known_gold = self._known.treasury if self._known is not None else None
+                gold = (
+                    known_gold
+                    if known_gold is not None
+                    else (await gs.get_game_overview()).gold
+                )
+                if gold < opt.gold_cost:
+                    return _no("treasury_short")
+                return _ok(gold=gold)
 
             case ActionKind.CITY_ATTACK:
                 known = self._known.city_targets if self._known is not None else None
@@ -1041,6 +1077,21 @@ class Executor:
                 return ActionOutcome(
                     OutcomeStatus.PENDING, "order_accepted_effect_later", True
                 )
+
+            case ActionKind.PURCHASE_ITEM:
+                if raw.startswith("PURCHASED|"):
+                    return confirmed("purchase_confirmed_from_dispatch")
+                if _game_error(raw):
+                    return self._unconfirmed(raw, "purchase_refused")
+
+                async def gold_spent():
+                    before = pre.get("gold")
+                    now = (await gs.get_game_overview()).gold
+                    return before is not None and now < before
+
+                if await self._poll(gold_spent):
+                    return confirmed("gold_spent")
+                return self._unconfirmed(raw, "purchase_not_observed")
 
             case ActionKind.CITY_ATTACK:
                 if raw.startswith(("CITY_RANGE_ATTACK|", "OK:CITY_RANGE_ATTACK|")):

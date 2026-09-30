@@ -50,6 +50,8 @@ _TABLE: dict[ActionKind, frozenset[str]] = {
     ActionKind.CHOOSE_ESCAPE_ROUTE: frozenset({"units"}),
     ActionKind.CHOOSE_ARTIFACT_PLAYER: frozenset({"units", "overview"}),
     ActionKind.UPGRADE_UNIT: frozenset({"units", "overview"}),
+    ActionKind.PURCHASE_ITEM: frozenset({"overview", "cities", "units"}),
+    ActionKind.SAVE_GOLD: frozenset(),
 }
 
 
