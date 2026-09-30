@@ -44,7 +44,7 @@ def test_parse_placement_batch_ranks_by_score_and_keeps_errors():
     assert [(p.x, p.y) for p in placements["DISTRICT_CAMPUS"]] == [(11, 12), (12, 13)]
     assert placements["DISTRICT_CAMPUS"][0].score == 3
     assert "science:3" in placements["DISTRICT_CAMPUS"][0].note
-    assert placements["BUILDING_PYRAMIDS"][0].score == 2
+    assert placements["BUILDING_PYRAMIDS"][0].score == -2  # negated displacement
     assert "No valid tile" in errors["DISTRICT_HOLY_SITE"]
     assert "BUILDING_STONEHENGE" in errors
 
@@ -161,3 +161,32 @@ def test_placement_precheck_accepts_the_item_and_repairs_keep_their_tile():
         )
     )
     assert out.status is OutcomeStatus.REJECTED
+
+
+# ------------------------------------------------------- review fixes
+def test_wonder_tiles_rank_lowest_displacement_first_and_name_the_resource():
+    lines = [
+        f"{SECTION_MARK}wonder:BUILDING_PYRAMIDS",
+        "WPLOT|10,13|TERRAIN_DESERT|FEATURE_NONE|false|false|RESOURCE_IRON|IMPROVEMENT_MINE|15",
+        "WPLOT|11,13|TERRAIN_DESERT_HILLS|none|true|false|none|none|0",
+    ]
+    placements, _ = parse_placement_batch(lines)
+    tiles = placements["BUILDING_PYRAMIDS"]
+    assert [(t.x, t.y) for t in tiles] == [
+        (11, 13),
+        (10, 13),
+    ]  # least destructive first
+    assert tiles[0].score > tiles[1].score  # one scale for shortlist: higher = better
+    assert (
+        "Iron" in tiles[1].note and "Mine" in tiles[1].note and "river" in tiles[0].note
+    )
+    assert "TERRAIN_" not in tiles[0].note
+
+
+def test_batch_leaves_no_bare_semicolons_after_stripping_sentinels():
+    from civ_mcp.lua.batch import build_batch
+
+    lua = build_batch(
+        [("a", 'if x then print("ERR:X"); print("---END---"); return end')]
+    )
+    assert "; ;" not in lua and ";;" not in lua

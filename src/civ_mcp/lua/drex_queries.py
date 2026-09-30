@@ -245,6 +245,32 @@ def build_placement_batch(
     return build_batch(sections)
 
 
+def _pretty_enum(value: str) -> str:
+    for prefix in ("TERRAIN_", "FEATURE_", "RESOURCE_", "IMPROVEMENT_"):
+        if value.startswith(prefix):
+            value = value[len(prefix) :]
+    return value.replace("_", " ").title()
+
+
+def _wonder_note(w) -> str:
+    parts = [_pretty_enum(w.terrain)]
+    if w.feature not in ("none", "", "FEATURE_NONE"):
+        parts.append(_pretty_enum(w.feature))
+    note = " ".join(parts)
+    if w.has_river:
+        note += "; river"
+    if w.is_coastal:
+        note += "; coast"
+    lost = [
+        _pretty_enum(v)
+        for v in (w.resource, w.improvement)
+        if v not in ("none", "", "RESOURCE_NONE", "IMPROVEMENT_NONE")
+    ]
+    if lost:
+        note += "; displaces " + " + ".join(lost)
+    return note
+
+
 def parse_placement_batch(
     lines: list[str],
 ) -> tuple[dict[str, list[Placement]], dict[str, str]]:
@@ -279,19 +305,14 @@ def parse_placement_batch(
                 for d in lq.parse_district_advisor_response(body)
             ]
         else:
+            # displacement_score is lower = better; negate so one scale (higher
+            # = better) serves both kinds, shortlist and the option text.
             found = [
                 Placement(
                     w.x,
                     w.y,
-                    w.displacement_score,
-                    f"{w.terrain}/{w.feature}"
-                    + ("; river" if w.has_river else "")
-                    + ("; coast" if w.is_coastal else "")
-                    + (
-                        f"; displaces {w.improvement}"
-                        if w.improvement not in ("none", "")
-                        else ""
-                    ),
+                    -w.displacement_score,
+                    _wonder_note(w),
                 )
                 for w in lq.parse_wonder_advisor_response(body)
             ]

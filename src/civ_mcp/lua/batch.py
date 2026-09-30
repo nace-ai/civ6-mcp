@@ -20,7 +20,11 @@ _SENTINEL_PRINT_SQ = f"print('{SENTINEL}')"
 def build_batch(sections: list[tuple[str, str]]) -> str:
     parts: list[str] = []
     for name, lua in sections:
-        body = lua.replace(_SENTINEL_PRINT, "").replace(_SENTINEL_PRINT_SQ, "")
+        # `do end` keeps `print(...); <here>; return` a valid statement list
+        # (a bare `;` is a syntax error in Lua 5.1-based Havok Script).
+        body = lua.replace(_SENTINEL_PRINT, "do end").replace(
+            _SENTINEL_PRINT_SQ, "do end"
+        )
         parts.append(
             f'print("{SECTION_MARK}{name}")\n'
             f"do local __ok, __err = pcall(function()\n{body}\nend)\n"

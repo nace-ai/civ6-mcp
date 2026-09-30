@@ -138,6 +138,9 @@ class TurnLedger:
     religion_partial: dict[str, str] = field(default_factory=dict)
     great_people_offered: bool = False
     dismissed_blockers: set[str] = field(default_factory=set)
+    # the city attack blocker was seen this turn and the per-city checks were
+    # re-opened for it once (a blocker raised mid-turn is decided, not dismissed)
+    attack_reopened: bool = False
 
 
 def key_for(spec: DecisionSpec) -> str:
@@ -269,11 +272,16 @@ class Scheduler:
         if PROMOTION_BLOCKER in blockers and not core.promotable:
             stale.append(PROMOTION_BLOCKER)
         attack = blockers & CITY_ATTACK_BLOCKERS
-        if attack and all(
-            not self._open(
-                ledger, DecisionSpec(DecisionCategory.CITY_ATTACK, f"city:{c.city_id}")
+        if (
+            attack
+            and ledger.attack_reopened
+            and all(
+                not self._open(
+                    ledger,
+                    DecisionSpec(DecisionCategory.CITY_ATTACK, f"city:{c.city_id}"),
+                )
+                for c in core.cities
             )
-            for c in core.cities
         ):
             stale.extend(sorted(attack))
         return [b for b in stale if b not in ledger.dismissed_blockers]
@@ -369,6 +377,18 @@ class Scheduler:
                 return spec
 
         if blockers & CITY_ATTACK_BLOCKERS:
+            if not ledger.attack_reopened:
+                # A blocker raised after this turn's proactive checks means new
+                # targets: let every city decide again, once.
+                ledger.attack_reopened = True
+                for city in core.cities:
+                    ledger.resolved.discard(
+                        key_for(
+                            DecisionSpec(
+                                DecisionCategory.CITY_ATTACK, f"city:{city.city_id}"
+                            )
+                        )
+                    )
             for city in sorted(core.cities, key=lambda c: c.city_id):
                 spec = DecisionSpec(
                     DecisionCategory.CITY_ATTACK, f"city:{city.city_id}"

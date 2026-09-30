@@ -220,3 +220,41 @@ def test_proactive_check_with_no_targets_costs_no_drex_call(tmp_path):
     assert atk[0]["decision"]["rule"] == "forced_single_candidate"
     assert atk[0]["dispatch"]["method"] is None
     assert not any(p.category is DecisionCategory.CITY_ATTACK for p in sel.points)
+
+
+def test_attack_blocker_appearing_after_the_check_reopens_the_cities_once():
+    from civ_mcp.drex.executor import ActionOutcome
+    from civ_mcp.drex.observation import Blocker
+
+    game = FakeGame()
+    game.city_targets = {fx.CAPITAL_ID: []}
+    core = asyncio.run(LiveObserver(game).core())
+    s = Scheduler()
+    ledger = TurnLedger(turn=5)
+    spec = DecisionSpec(DecisionCategory.CITY_ATTACK, f"city:{fx.CAPITAL_ID}")
+    # the proactive check ran and held fire (no targets yet)
+    s.note(
+        ledger,
+        spec,
+        ActionKind.HOLD_FIRE,
+        ActionOutcome(OutcomeStatus.CONFIRMED, "x", False),
+    )
+    assert s.stale_blockers(core, ledger) == []
+    # later this turn the engine raises the attack blocker (a war started)
+    import dataclasses
+
+    core2 = dataclasses.replace(core, blockers=[Blocker(BLOCKER, "City can attack")])
+    step = s.next(core2, ledger)
+    assert step.category is DecisionCategory.CITY_ATTACK  # re-opened once
+    assert s.stale_blockers(core2, ledger) == []  # not stale while re-opened
+    s.note(
+        ledger,
+        step,
+        ActionKind.HOLD_FIRE,
+        ActionOutcome(OutcomeStatus.CONFIRMED, "x", False),
+    )
+    assert s.stale_blockers(core2, ledger) == [BLOCKER]  # now genuinely stale
+    assert (
+        getattr(s.next(core2, ledger), "category", None)
+        is not DecisionCategory.CITY_ATTACK
+    )
