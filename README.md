@@ -2,6 +2,8 @@
 
 An MCP server that lets LLM agents play full games of Civilization VI.
 
+> **Origin.** This repository is the NACE AI fork of [lmwilki/civ6-mcp](https://github.com/lmwilki/civ6-mcp) by Liam Wilkinson, who designed and built the MCP server, the FireTuner protocol work and the game tooling. The fork adds the Drex decision runner (autonomous play) and base-ruleset fixes. Please report issues with the core server upstream and credit the original author when reusing this work.
+
 Connect any MCP-compatible client — Claude Code, Codex, Gemini CLI, or your own — to a running Civ 6 game. The agent reads game state, moves units, manages cities, conducts diplomacy, and ends turns, all through the game's own rule-enforcing APIs. No cheats, no vision model required.
 
 <!-- TODO: Add screenshot or GIF of agent playing -->
@@ -233,4 +235,4 @@ The repo includes an [AGENTS.md](AGENTS.md) playbook (symlinked as `CLAUDE.md` f
 
 ## License
 
-MIT
+MIT. Copyright (c) 2026 Liam Wilkinson for the original civ6-mcp; changes in this fork are contributed by NACE AI under the same MIT license. See [LICENSE](LICENSE); the original copyright notice is kept as the license requires.
