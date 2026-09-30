@@ -44,8 +44,10 @@ from civ_mcp.end_turn import EndTurnOutcome, execute_end_turn_typed
 from civ_mcp.game_lifecycle import save_game
 
 DEFAULT_OBJECTIVE = (
-    "Develop the empire: found cities on good land, keep every city producing, "
-    "research steadily, and keep units and cities safe."
+    "Win the game: expand fast, explore the map, use every unit every turn, "
+    "attack barbarians and weak neighbours when the odds favour you, trade and "
+    "ally with the rest, spend gold rather than hoard it, and build toward a "
+    "science or domination victory."
 )
 INTERRUPTION_KEY = "end_turn_interrupted"
 # Tuner-side failures the runner recovers from by reconnecting (never by
