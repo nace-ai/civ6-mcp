@@ -164,6 +164,9 @@ class TurnLedger:
     # the city attack blocker was seen this turn and the per-city checks were
     # re-opened for it once (a blocker raised mid-turn is decided, not dismissed)
     attack_reopened: bool = False
+    # prompt categories re-opened after their blocker was dismissed and came
+    # back the same turn (a second captured city); bounded per category
+    prompt_reopens: Counter[str] = field(default_factory=Counter)
 
 
 def key_for(spec: DecisionSpec) -> str:
@@ -222,7 +225,9 @@ class Scheduler:
         max_diplomacy_rounds: int = 4,
         max_repeat_decisions: int = 6,
         max_governor_decisions: int = 5,
+        max_prompt_reopens: int = 2,
     ):
+        self.max_prompt_reopens = max_prompt_reopens
         self.max_unit_decisions = max_unit_decisions
         self.max_decisions_per_turn = max_decisions_per_turn
         self.max_failures_per_key = max_failures_per_key
@@ -280,6 +285,8 @@ class Scheduler:
             failed_candidates=set(ledger.failed_candidates),
             exit_offered=set(ledger.exit_offered),
             stuck_sessions=set(ledger.stuck_sessions),
+            dismissed_blockers=set(ledger.dismissed_blockers),
+            prompt_reopens=Counter(ledger.prompt_reopens),
         )
         return self.next(core, trial)
 
@@ -371,6 +378,17 @@ class Scheduler:
         for group, category in PROMPT_BLOCKERS:
             if blockers & group:
                 spec = DecisionSpec(category, "empire")
+                key = key_for(spec)
+                if (
+                    key in ledger.resolved
+                    and (blockers & group & ledger.dismissed_blockers)
+                    and ledger.prompt_reopens[key] < self.max_prompt_reopens
+                ):
+                    # the prompt came back after its blocker was dismissed:
+                    # a new city/spy/artifact is pending, decide it
+                    ledger.prompt_reopens[key] += 1
+                    ledger.resolved.discard(key)
+                    ledger.dismissed_blockers -= group
                 if self._open(ledger, spec):
                     return spec
 

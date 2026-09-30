@@ -312,7 +312,7 @@ DISPATCH_CASES.append(
             ActionKind.RESOLVE_CAPTURED_CITY,
             lambda c: c.params.action == "raze",
         ),
-        ("resolve_city_capture", ("raze",)),
+        ("resolve_captured_city", ("raze", 65540)),
     )
 )
 DISPATCH_CASES.append(

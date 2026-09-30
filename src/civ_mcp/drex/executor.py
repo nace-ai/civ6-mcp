@@ -193,7 +193,7 @@ def dispatch_call(candidate: Candidate) -> DispatchCall:
                 "make_trade_route", (p.unit.unit_index, p.target_x, p.target_y)
             )
         case ActionKind.RESOLVE_CAPTURED_CITY, CapturedCityParams():
-            return DispatchCall("resolve_city_capture", (p.action,))
+            return DispatchCall("resolve_captured_city", (p.action, p.city_id))
         case ActionKind.CHOOSE_ESCAPE_ROUTE, EscapeRouteParams():
             return DispatchCall("choose_spy_escape", (p.district_type,))
         case ActionKind.CHOOSE_ARTIFACT_PLAYER, ArtifactParams():
@@ -973,9 +973,11 @@ class Executor:
                 return self._unconfirmed(raw, "trade_route_not_observed")
 
             case ActionKind.RESOLVE_CAPTURED_CITY:
-                if raw.startswith(f"{p.action.upper()}|"):
-                    return confirmed("capture_resolved_from_dispatch")
-                if _game_error(raw):
+                # The command is applied asynchronously: confirm only once the
+                # city has left the pending slot, so the same city is never
+                # offered (and decided differently) twice.
+                requested = raw.startswith(f"{p.action.upper()}|")
+                if not requested and _game_error(raw):
                     return self._unconfirmed(raw, "capture_refused")
 
                 async def city_gone():
@@ -984,32 +986,44 @@ class Executor:
 
                 if await self._poll(city_gone):
                     return confirmed("captured_city_no_longer_pending")
+                if requested:
+                    return ActionOutcome(
+                        OutcomeStatus.PENDING, "capture_requested_effect_pending", True
+                    )
                 return self._unconfirmed(raw, "capture_not_observed")
 
             case ActionKind.CHOOSE_ESCAPE_ROUTE:
-                if raw.startswith("ESCAPE_ROUTE|"):
-                    return confirmed("escape_route_confirmed_from_dispatch")
-                if _game_error(raw):
+                requested = raw.startswith("ESCAPE_ROUTE|")
+                if not requested and _game_error(raw):
                     return self._unconfirmed(raw, "escape_refused")
 
                 async def spy_gone():
-                    return (await gs.get_spy_escape_choice()) is None
+                    esc = await gs.get_spy_escape_choice()
+                    return esc is None or esc.spy_unit_id != p.spy_unit_id
 
                 if await self._poll(spy_gone):
                     return confirmed("spy_no_longer_escaping")
+                if requested:
+                    return ActionOutcome(
+                        OutcomeStatus.PENDING, "escape_requested_effect_pending", True
+                    )
                 return self._unconfirmed(raw, "escape_not_observed")
 
             case ActionKind.CHOOSE_ARTIFACT_PLAYER:
-                if raw.startswith("ARTIFACT_CHOSEN|"):
-                    return confirmed("artifact_confirmed_from_dispatch")
-                if _game_error(raw):
+                requested = raw.startswith("ARTIFACT_CHOSEN|")
+                if not requested and _game_error(raw):
                     return self._unconfirmed(raw, "artifact_refused")
 
                 async def artifact_gone():
-                    return (await gs.get_artifact_choice()) is None
+                    art = await gs.get_artifact_choice()
+                    return art is None or art.unit_id != p.archaeologist_unit_id
 
                 if await self._poll(artifact_gone):
                     return confirmed("artifact_no_longer_pending")
+                if requested:
+                    return ActionOutcome(
+                        OutcomeStatus.PENDING, "artifact_requested_effect_pending", True
+                    )
                 return self._unconfirmed(raw, "artifact_not_observed")
 
             case ActionKind.UPGRADE_UNIT:

@@ -208,6 +208,15 @@ class GameState:
         lines = await self.conn.execute_write(lq_drex.build_captured_city_query())
         return lq_drex.parse_captured_city(lines)
 
+    async def resolve_captured_city(self, action: str, city_id: int) -> str:
+        """InGame: keep/raze/liberate/reject the pending city, only if it is
+        still ``city_id`` (guarded Lua; the legacy resolve_city_capture raises
+        in rulesets without loyalty)."""
+        lines = await self.conn.execute_write(
+            lq_drex.build_resolve_captured_city(action, city_id)
+        )
+        return _action_result(lines)
+
     async def get_spy_escape_choice(self) -> lq_drex.EscapeChoice | None:
         """InGame: the caught spy and its available escape districts; None
         when no escape prompt stands (the query never asks the engine for an

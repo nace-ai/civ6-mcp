@@ -69,7 +69,7 @@ def test_upgrade_dispatches_confirms_and_spends_gold():
     game = FakeGame()
     game.units[fx.WARRIOR_ID] = _upgradeable_warrior()
     game.gold = 200
-    obs, core, point, inputs, _ = _point(game)
+    obs, _, point, inputs, _ = _point(game)
     cand = next(c for c in point.candidates if c.kind is ActionKind.UPGRADE_UNIT)
     outcome = asyncio.run(
         Executor(game, sleep=_no_sleep).execute(
@@ -91,7 +91,7 @@ def test_upgrade_refused_by_engine_is_rejected():
     game = FakeGame()
     game.units[fx.WARRIOR_ID] = _upgradeable_warrior()
     game.gold = 200
-    obs, core, point, inputs, _ = _point(game)
+    obs, _, point, inputs, _ = _point(game)
     cand = next(c for c in point.candidates if c.kind is ActionKind.UPGRADE_UNIT)
     game.gold = 10  # spent since the observation: the engine refuses
     outcome = asyncio.run(

@@ -20,6 +20,7 @@ from civ_mcp.drex.scheduler import (
 )
 from civ_mcp.lua.drex_queries import (
     build_captured_city_query,
+    build_resolve_captured_city,
     parse_captured_city,
 )
 
@@ -112,8 +113,9 @@ def test_resolve_dispatches_action_and_confirms_from_dispatch():
         )
     )
     assert outcome.status is OutcomeStatus.CONFIRMED
-    assert game.calls == [("resolve_city_capture", ("raze",))]
-    assert game.query_counts["get_captured_city"] == 1  # inputs reused
+    assert game.calls == [("resolve_captured_city", ("raze", 65540))]
+    # inputs reused for the precheck; one readback confirms the city left the slot
+    assert game.query_counts["get_captured_city"] == 2
 
 
 def test_single_option_is_forced():
@@ -133,7 +135,7 @@ def test_precheck_rejects_when_a_different_city_is_pending():
     game.extra_blockers = [(RAZE, "x")]
     obs = LiveObserver(game)
     core = asyncio.run(obs.core())
-    point, inputs = _point(obs, core)
+    point, _ = _point(obs, core)
     cand = next(c for c in point.candidates if c.params.action == "raze")
     other = fx.captured_city()
     other.city_id, other.name = 65541, "Ostia"
@@ -211,7 +213,7 @@ def test_standing_blocker_with_nothing_pending_is_dismissed(tmp_path):
     runner.max_loop_iterations = 80
     result = asyncio.run(runner.run())
     assert result.stop_reason == "turn_budget_reached"
-    assert ("resolve_city_capture", ("keep",)) in game.calls
+    assert ("resolve_captured_city", ("keep", 65540)) in game.calls
     recs = _records(tmp_path)
     assert not [r for r in recs if r["type"] == "unsupported_blocker"]
     hk = [
@@ -237,3 +239,61 @@ def test_captured_city_query_survives_rulesets_without_loyalty():
     assert (
         "pcall(function() city = player:GetCities():GetNextCapturedCity() end)" in lua
     )
+
+
+# ------------------------------------------------ review fixes (Critical 1, Important 2-4)
+def test_resolve_lua_is_guarded_and_checks_the_pending_city_id():
+    lua = build_resolve_captured_city("keep", 65540)
+    assert (
+        "pcall(function() city = player:GetCities():GetNextRebelledCity() end)" in lua
+    )
+    assert (
+        "pcall(function() city = player:GetCities():GetNextCapturedCity() end)" in lua
+    )
+    assert "CityDestroyDirectives.KEEP" in lua and "RequestCommand" in lua
+    assert "DIFFERENT_CITY" in lua and "65540" in lua
+    assert 'print("OK:KEEP|"' in lua
+    assert "ERR:" in build_resolve_captured_city("burn", 65540)
+
+
+def test_confirmation_needs_the_city_to_leave_the_pending_slot():
+    game = FakeGame()
+    game.captured = fx.captured_city()
+    game.extra_blockers = [(RAZE, "x")]
+    game.async_prompts = True  # the engine applies the command later
+    obs = LiveObserver(game)
+    core = asyncio.run(obs.core())
+    point, inputs = _point(obs, core)
+    cand = next(c for c in point.candidates if c.params.action == "keep")
+    outcome = asyncio.run(
+        Executor(game, sleep=_no_sleep).execute(
+            cand, point, current_version=obs.version, turn=5, inputs=inputs
+        )
+    )
+    assert outcome.status is OutcomeStatus.PENDING
+    assert outcome.dispatched
+
+
+def test_a_second_capture_after_dismissal_is_offered_again():
+    game = FakeGame()
+    game.captured = fx.captured_city()
+    game.extra_blockers = [(RAZE, "x")]
+    game.sticky_blockers = {RAZE}
+    core = asyncio.run(LiveObserver(game).core())
+    s = Scheduler()
+    ledger = TurnLedger(turn=5)
+    spec = s.next(core, ledger)
+    assert spec.category is DecisionCategory.CAPTURED_CITY
+    s.exhaust(ledger, spec)  # query said nothing pending
+    stale = s.stale_blockers(core, ledger)
+    assert RAZE in stale
+    ledger.dismissed_blockers.update(stale)
+    # units act, a second city is captured: the blocker stands again
+    again = s.next(core, ledger)
+    assert again.category is DecisionCategory.CAPTURED_CITY
+    # bounded: after two re-opens the same turn the prompt is left to housekeeping
+    for _ in range(3):
+        s.exhaust(ledger, again)
+        ledger.dismissed_blockers.update(s.stale_blockers(core, ledger))
+        again = s.next(core, ledger)
+    assert getattr(again, "category", None) is not DecisionCategory.CAPTURED_CITY

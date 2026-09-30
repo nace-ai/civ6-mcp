@@ -419,6 +419,41 @@ def parse_captured_city(lines: list[str]) -> CapturedCity | None:
     return city
 
 
+def build_resolve_captured_city(action: str, city_id: int) -> str:
+    """InGame: apply ``action`` to the pending captured/rebelled city, but only
+    if it is still the city Drex decided on (``city_id``). Same directive and
+    ``CityCommandTypes.DESTROY`` request as RazeCity.lua; both lookups are
+    pcall-guarded because ``GetNextRebelledCity`` is absent without loyalty."""
+    directive = _CAPTURE_DIRECTIVES.get(action)
+    if directive is None:
+        valid = ", ".join(CAPTURE_ACTIONS)
+        return (
+            f'print("ERR:INVALID_ACTION|Valid actions: {valid}"); print("{SENTINEL}")'
+        )
+    return f"""
+local me = Game.GetLocalPlayer()
+local player = Players[me]
+local city, source = nil, "rebelled"
+pcall(function() city = player:GetCities():GetNextRebelledCity() end)
+if city == nil then
+  source = "captured"
+  pcall(function() city = player:GetCities():GetNextCapturedCity() end)
+end
+if city == nil then print("ERR:NO_PENDING_CITY|No rebelled or captured city pending decision"); print("{SENTINEL}"); return end
+local cid = city:GetID() + me * 65536
+if cid ~= {int(city_id)} then print("ERR:DIFFERENT_CITY|pending " .. cid .. ", asked {int(city_id)}"); print("{SENTINEL}"); return end
+local name = Locale.Lookup(city:GetName())
+local params = {{}}
+params[UnitOperationTypes.PARAM_FLAGS] = CityDestroyDirectives.{directive}
+local ok, can = pcall(function() return CityManager.CanStartCommand(city, CityCommandTypes.DESTROY, params) end)
+if not ok or not can then print("ERR:CANNOT_{action.upper()}|Cannot {action} " .. name); print("{SENTINEL}"); return end
+CityManager.RequestCommand(city, CityCommandTypes.DESTROY, params)
+pcall(function() local popup = ContextPtr:LookUpControl("/InGame/RazeCity") if popup then popup:SetHide(true) end end)
+print("OK:{action.upper()}|" .. name .. " (pop " .. city:GetPopulation() .. ", id:" .. cid .. ", " .. source .. ")")
+print("{SENTINEL}")
+"""
+
+
 ESCAPE_DISTRICTS = (  # the four routes EspionageEscape.lua offers, fastest first
     "DISTRICT_AERODROME",
     "DISTRICT_HARBOR",

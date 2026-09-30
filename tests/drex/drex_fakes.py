@@ -85,8 +85,10 @@ class FakeGame:
         self.trade_status = fx.trade_status(capacity=0, active=0)
         self.trade_destinations: list = []
         self.captured = None  # Phase 4: pending captured/rebelled city
+        self.async_prompts = False  # engine applies prompt commands later
         self.spy_escape = None  # Phase 4: caught spy awaiting an escape route
         self.artifact = None  # Phase 4: artifact awaiting a player choice
+        self.stacked_units_on_tile: set[str] = set()  # Phase 5: purchases refused
         # blockers the fake keeps raising even after the matching action
         self.sticky_blockers: set[str] = set()
         self.fail: dict[str, tuple[Exception, bool]] = {}
@@ -478,6 +480,31 @@ class FakeGame:
         self._after(fail)
         return f"UPGRADED|{old} -> {u.unit_type}"
 
+    async def purchase_item(
+        self, city_id, item_type, item_name, yield_type="YIELD_GOLD"
+    ):
+        fail = self._record("purchase_item", city_id, item_type, item_name, yield_type)
+        opt = next(
+            (
+                o
+                for o in self.production.get(city_id, [])
+                if o.item_name == item_name and o.gold_cost >= 0
+            ),
+            None,
+        )
+        if opt is None:
+            return f"Error: CANNOT_PURCHASE|{item_name} not purchasable"
+        if item_name in self.stacked_units_on_tile:
+            return f"Error: STACKING_CONFLICT|Cannot purchase {item_name}"
+        if self.gold < opt.gold_cost:
+            return (
+                f"Error: CANNOT_PURCHASE|costs {opt.gold_cost}g but you only have"
+                f" {int(self.gold)}g"
+            )
+        had, self.gold = self.gold, self.gold - opt.gold_cost
+        self._after(fail)
+        return f"PURCHASED|{item_name}|cost={opt.gold_cost}g (had {int(had)}g)"
+
     async def diplomacy_respond(self, other_player_id, response):
         fail = self._record("diplomacy_respond", other_player_id, response)
         remaining = self.session_rounds.get(other_player_id, 1) - 1
@@ -619,23 +646,26 @@ class FakeGame:
         self._after(fail)
         return f"CITY_RANGE_ATTACK|Roma -> UNIT_WARRIOR@{target_x},{target_y}|pre_hp:80/100"
 
-    async def resolve_city_capture(self, action):
-        fail = self._record("resolve_city_capture", action)
+    async def resolve_captured_city(self, action, city_id):
+        fail = self._record("resolve_captured_city", action, city_id)
         if self.captured is None:
             return (
                 "Error: NO_PENDING_CITY|No rebelled or captured city pending decision"
             )
+        if self.captured.city_id != city_id:
+            return f"Error: DIFFERENT_CITY|pending {self.captured.city_id}, asked {city_id}"
         if action not in self.captured.options:
             return (
                 f"Error: CANNOT_{action.upper()}|Cannot {action} {self.captured.name}"
             )
         name, cid = self.captured.name, self.captured.city_id
-        self.captured = None
-        from civ_mcp.drex.scheduler import CAPTURED_CITY_BLOCKERS
+        if not self.async_prompts:
+            self.captured = None
+            from civ_mcp.drex.scheduler import CAPTURED_CITY_BLOCKERS
 
-        self.extra_blockers = [
-            b for b in self.extra_blockers if b[0] not in CAPTURED_CITY_BLOCKERS
-        ]
+            self.extra_blockers = [
+                b for b in self.extra_blockers if b[0] not in CAPTURED_CITY_BLOCKERS
+            ]
         self._after(fail)
         return f"{action.upper()}|{name} (pop 4, id:{cid}, captured)"
 
@@ -646,12 +676,13 @@ class FakeGame:
         if district_type not in self.spy_escape.routes:
             return f"Error: ROUTE_NOT_AVAILABLE|{district_type}"
         name = self.spy_escape.spy_name
-        self.spy_escape = None
-        from civ_mcp.drex.scheduler import SPY_ESCAPE_BLOCKERS
+        if not self.async_prompts:
+            self.spy_escape = None
+            from civ_mcp.drex.scheduler import SPY_ESCAPE_BLOCKERS
 
-        self.extra_blockers = [
-            b for b in self.extra_blockers if b[0] not in SPY_ESCAPE_BLOCKERS
-        ]
+            self.extra_blockers = [
+                b for b in self.extra_blockers if b[0] not in SPY_ESCAPE_BLOCKERS
+            ]
         self._after(fail)
         return f"ESCAPE_ROUTE|{name}|{district_type}"
 
@@ -662,10 +693,11 @@ class FakeGame:
         names = {pid: name for pid, name, _ in self.artifact.players}
         if player_id not in names:
             return f"Error: PLAYER_NOT_OFFERED|{player_id}"
-        self.artifact = None
-        self.extra_blockers = [
-            b for b in self.extra_blockers if b[0] != "ENDTURN_BLOCKING_ARTIFACT"
-        ]
+        if not self.async_prompts:
+            self.artifact = None
+            self.extra_blockers = [
+                b for b in self.extra_blockers if b[0] != "ENDTURN_BLOCKING_ARTIFACT"
+            ]
         self._after(fail)
         return f"ARTIFACT_CHOSEN|{names[player_id]}"
 
